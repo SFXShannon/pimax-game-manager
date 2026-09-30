@@ -36,7 +36,7 @@ try {
     if ((Test-Path $legacyCfg) -and -not (Test-Path $newCfg)) { Copy-Item $legacyCfg $newCfg }
 } catch { }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
-$AppVersion = '1.5.2'
+$AppVersion = '1.6.0'
 $RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-game-manager/releases/latest'
 
 # ---------- Library ----------
@@ -581,95 +581,432 @@ function Restore-Snapshot($snap, [bool]$images, [bool]$order, [bool]$settings, [
     return [pscustomobject]$report
 }
 
+# ---------- Theme ----------
+# Dark title bars on Windows 10/11 so the window frame matches the app
+try { Add-Type -Namespace PGM -Name Dwm -MemberDefinition '[DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);' -ErrorAction Stop } catch { }
+function Set-DarkTitleBar($win) {
+    try {
+        $h = (New-Object Windows.Interop.WindowInteropHelper $win).Handle
+        $v = 1;          [void][PGM.Dwm]::DwmSetWindowAttribute($h, 20, [ref]$v, 4)   # dark mode title bar
+        $v = 0x0014100E; [void][PGM.Dwm]::DwmSetWindowAttribute($h, 35, [ref]$v, 4)   # caption colour (Windows 11)
+        $v = 0x00382C26; [void][PGM.Dwm]::DwmSetWindowAttribute($h, 34, [ref]$v, 4)   # border colour (Windows 11)
+    } catch { }
+}
+
+# Shared styles, icons (Ico*) and the app logo, inserted into every window where its XAML says __THEME__
+$ThemeXaml = @'
+    <SolidColorBrush x:Key="AccentBrush" Color="#5B8CFF"/>
+    <LinearGradientBrush x:Key="LogoGrad" StartPoint="0,0" EndPoint="1,1">
+      <GradientStop Color="#22D3EE" Offset="0"/><GradientStop Color="#3B82F6" Offset="0.5"/><GradientStop Color="#8B5CF6" Offset="1"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="LineGrad" StartPoint="0,0" EndPoint="1,0">
+      <GradientStop Color="#0022D3EE" Offset="0"/><GradientStop Color="#9022D3EE" Offset="0.3"/><GradientStop Color="#908B5CF6" Offset="0.7"/><GradientStop Color="#008B5CF6" Offset="1"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="LensGrad" StartPoint="0,0" EndPoint="0,1">
+      <GradientStop Color="#1C2436" Offset="0"/><GradientStop Color="#07090D" Offset="1"/>
+    </LinearGradientBrush>
+    <Geometry x:Key="LogoVisor">M8 20 C8 17 10 16 13 16 H51 C54 16 56 17 56 20 L58 34 C58.5 39 56 43 51 43 H40 C37 43 35.5 41.5 34.5 39.5 L33.6 37.8 C33 36.6 31 36.6 30.4 37.8 L29.5 39.5 C28.5 41.5 27 43 24 43 H13 C8 43 5.5 39 6 34 Z</Geometry>
+    <Geometry x:Key="LogoLenses">M12.5 24 H27 C29 24 30.2 25.5 29.8 27.5 L28.9 32 C28.5 34 27.2 35 25.2 35 H14.5 C12 35 10.6 33.4 11 31 L11.6 26 C11.8 24.8 12 24 12.5 24 Z M51.5 24 H37 C35 24 33.8 25.5 34.2 27.5 L35.1 32 C35.5 34 36.8 35 38.8 35 H49.5 C52 35 53.4 33.4 53 31 L52.4 26 C52.2 24.8 52 24 51.5 24 Z</Geometry>
+    <DrawingImage x:Key="LogoImage">
+      <DrawingImage.Drawing>
+        <DrawingGroup>
+          <GeometryDrawing Brush="{StaticResource LogoGrad}" Geometry="{StaticResource LogoVisor}"/>
+          <GeometryDrawing Brush="{StaticResource LensGrad}" Geometry="{StaticResource LogoLenses}"/>
+          <GeometryDrawing Geometry="M15 19 H49"><GeometryDrawing.Pen><Pen Brush="#70FFFFFF" Thickness="1.2" StartLineCap="Round" EndLineCap="Round"/></GeometryDrawing.Pen></GeometryDrawing>
+          <GeometryDrawing Geometry="M15.5 27.5 H20.5 M38.5 27.5 H43.5"><GeometryDrawing.Pen><Pen Brush="#A0FFFFFF" Thickness="1.3" StartLineCap="Round" EndLineCap="Round"/></GeometryDrawing.Pen></GeometryDrawing>
+        </DrawingGroup>
+      </DrawingImage.Drawing>
+    </DrawingImage>
+    <Geometry x:Key="IcoSearch">M10.5 4 a6.5 6.5 0 1 1 0 13 a6.5 6.5 0 1 1 0 -13 Z M15.5 15.5 L20.5 20.5</Geometry>
+    <Geometry x:Key="IcoFolder">M3 7 C3 6.4 3.4 6 4 6 H10 L12 8.5 H20 C20.6 8.5 21 8.9 21 9.5 V18 C21 18.6 20.6 19 20 19 H4 C3.4 19 3 18.6 3 18 Z</Geometry>
+    <Geometry x:Key="IcoEye">M2 12 C5 6.5 19 6.5 22 12 C19 17.5 5 17.5 2 12 Z M12 9.5 a2.5 2.5 0 1 1 0 5 a2.5 2.5 0 1 1 0 -5 Z</Geometry>
+    <Geometry x:Key="IcoCheck">M5 12.5 L10 17.5 L19.5 7</Geometry>
+    <Geometry x:Key="IcoUndo">M8.5 5 L4 9.5 L8.5 14 M4 9.5 H14.5 C18 9.5 20.5 12 20.5 15 C20.5 18 18 20 14.5 20 H10</Geometry>
+    <Geometry x:Key="IcoRefresh">M20 12 A8 8 0 1 1 17.66 6.34 M20 4 V9 H15</Geometry>
+    <Geometry x:Key="IcoPower">M12 3 V11 M7 6.2 A8 8 0 1 0 17 6.2</Geometry>
+    <Geometry x:Key="IcoKey">M8 10 a4.5 4.5 0 1 1 0 9 a4.5 4.5 0 1 1 0 -9 Z M11.2 11.3 L20 2.5 M16.5 6 L19.5 9 M18.5 4 L21 6.5</Geometry>
+    <Geometry x:Key="IcoList">M9 6 H20 M9 12 H20 M9 18 H20 M4.5 6 H5 M4.5 12 H5 M4.5 18 H5</Geometry>
+    <Geometry x:Key="IcoSliders">M4 7 H7 M11 7 H20 M9 5 a2 2 0 1 1 0 4 a2 2 0 1 1 0 -4 Z M4 17 H13 M17 17 H20 M15 15 a2 2 0 1 1 0 4 a2 2 0 1 1 0 -4 Z</Geometry>
+    <Geometry x:Key="IcoArchive">M3.5 4.5 H20.5 V8.5 H3.5 Z M5 8.5 V19 C5 19.6 5.4 20 6 20 H18 C18.6 20 19 19.6 19 19 V8.5 M10 12.5 H14</Geometry>
+    <Geometry x:Key="IcoDownload">M12 4 V15 M7 10.5 L12 15.5 L17 10.5 M5 20 H19</Geometry>
+    <Geometry x:Key="IcoSave">M5 4 H16 L20 8 V19 C20 19.6 19.6 20 19 20 H5 C4.4 20 4 19.6 4 19 V5 C4 4.4 4.4 4 5 4 Z M8 4 V8.5 H15 V4 M7.5 20 V14 H16.5 V20</Geometry>
+    <Geometry x:Key="IcoTrash">M4 7 H20 M9.5 7 V4.5 H14.5 V7 M6 7 L7 19.5 C7 20 7.4 20.5 8 20.5 H16 C16.6 20.5 17 20 17 19.5 L18 7 M10 11 V17 M14 11 V17</Geometry>
+    <Geometry x:Key="IcoCopy">M9 9 H20 V20 H9 Z M15 9 V4 H4 V15 H9</Geometry>
+    <Geometry x:Key="IcoPin">M9 3.5 H15 M10 3.5 V9 L6.5 13.5 H17.5 L14 9 V3.5 M12 13.5 V21</Geometry>
+    <Geometry x:Key="IcoSort">M4 6 H13 M4 12 H10 M4 18 H7 M17.5 5 V19 M14.5 16 L17.5 19 L20.5 16</Geometry>
+    <Geometry x:Key="IcoUp">M12 19 V5 M6 11 L12 5 L18 11</Geometry>
+    <Geometry x:Key="IcoDown">M12 5 V19 M6 13 L12 19 L18 13</Geometry>
+    <Geometry x:Key="IcoTop">M5 4 H19 M12 20 V9 M7 14 L12 9 L17 14</Geometry>
+    <Geometry x:Key="IcoBottom">M5 20 H19 M12 4 V15 M7 10 L12 15 L17 10</Geometry>
+    <Geometry x:Key="IcoClose">M6 6 L18 18 M18 6 L6 18</Geometry>
+    <Geometry x:Key="IcoImage">M4 5 H20 C20.6 5 21 5.4 21 6 V18 C21 18.6 20.6 19 20 19 H4 C3.4 19 3 18.6 3 18 V6 C3 5.4 3.4 5 4 5 Z M3 15.5 L8.5 10.5 L13.5 15 L16.5 12.5 L21 16.5 M15.5 7.5 a1.5 1.5 0 1 1 0 3 a1.5 1.5 0 1 1 0 -3 Z</Geometry>
+    <Geometry x:Key="IcoArrowRight">M5 12 H19 M13 6 L19 12 L13 18</Geometry>
+    <Geometry x:Key="IcoArrowLeft">M19 12 H5 M11 6 L5 12 L11 18</Geometry>
+    <Style TargetType="ToolTip">
+      <Setter Property="Background" Value="#1B1F28"/><Setter Property="Foreground" Value="#E8EBF2"/>
+      <Setter Property="BorderBrush" Value="#2E3542"/><Setter Property="Padding" Value="9,6"/>
+    </Style>
+    <Style x:Key="BtnBase" TargetType="Button">
+      <Setter Property="Background" Value="#1F2430"/><Setter Property="Foreground" Value="#E8EBF2"/>
+      <Setter Property="BorderBrush" Value="#2E3542"/><Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="13,7"/><Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="FocusVisualStyle" Value="{x:Null}"/><Setter Property="SnapsToDevicePixels" Value="True"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Grid>
+              <Border x:Name="Bd" CornerRadius="7" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"/>
+              <Border x:Name="Hl" CornerRadius="7" Background="#FFFFFF" Opacity="0"/>
+              <ContentPresenter Margin="{TemplateBinding Padding}" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}" RecognizesAccessKey="True"/>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Hl" Property="Opacity" Value="0.07"/></Trigger>
+              <Trigger Property="IsPressed" Value="True"><Setter TargetName="Hl" Property="Opacity" Value="0.14"/></Trigger>
+              <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Bd" Property="BorderBrush" Value="#5B8CFF"/></Trigger>
+              <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.38"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style TargetType="Button" BasedOn="{StaticResource BtnBase}"/>
+    <Style x:Key="IconBtn" TargetType="Button" BasedOn="{StaticResource BtnBase}">
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Grid>
+              <Border x:Name="Bd" CornerRadius="7" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"/>
+              <Border x:Name="Hl" CornerRadius="7" Background="#FFFFFF" Opacity="0"/>
+              <StackPanel Orientation="Horizontal" Margin="{TemplateBinding Padding}" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}">
+                <Viewbox Width="14" Height="14" VerticalAlignment="Center">
+                  <Canvas Width="24" Height="24">
+                    <Path Data="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}" Stroke="{Binding Foreground, RelativeSource={RelativeSource TemplatedParent}}"
+                          StrokeThickness="2.2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
+                  </Canvas>
+                </Viewbox>
+                <ContentPresenter Margin="8,0,0,0" VerticalAlignment="Center" RecognizesAccessKey="True"/>
+              </StackPanel>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Hl" Property="Opacity" Value="0.07"/></Trigger>
+              <Trigger Property="IsPressed" Value="True"><Setter TargetName="Hl" Property="Opacity" Value="0.14"/></Trigger>
+              <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Bd" Property="BorderBrush" Value="#5B8CFF"/></Trigger>
+              <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.38"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style TargetType="TextBox">
+      <Setter Property="Background" Value="#161A21"/><Setter Property="Foreground" Value="#E8EBF2"/>
+      <Setter Property="BorderBrush" Value="#2A303C"/><Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="8,6"/><Setter Property="CaretBrush" Value="#E8EBF2"/>
+      <Setter Property="SelectionBrush" Value="#5B8CFF"/><Setter Property="VerticalContentAlignment" Value="Center"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="TextBox">
+            <Border x:Name="Bd" CornerRadius="7" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
+              <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                            Focusable="False" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Hidden"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="BorderBrush" Value="#3A4252"/></Trigger>
+              <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Bd" Property="BorderBrush" Value="#5B8CFF"/></Trigger>
+              <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.45"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style TargetType="CheckBox">
+      <Setter Property="Foreground" Value="#E8EBF2"/><Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="CheckBox">
+            <Grid Background="Transparent">
+              <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+              <Border x:Name="Box" Width="17" Height="17" CornerRadius="4" BorderThickness="1.5" BorderBrush="#434B5C" Background="#161A21" VerticalAlignment="Center">
+                <Path x:Name="Mark" Data="M3 7.5 L6 10.5 L11 4.5" Stroke="#FFFFFF" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Visibility="Collapsed"/>
+              </Border>
+              <ContentPresenter x:Name="Cp" Grid.Column="1" Margin="8,0,0,0" VerticalAlignment="Center" RecognizesAccessKey="True"/>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Box" Property="BorderBrush" Value="#5B8CFF"/></Trigger>
+              <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="Box" Property="Background" Value="#2F6BFF"/><Setter TargetName="Box" Property="BorderBrush" Value="#5B8CFF"/>
+                <Setter TargetName="Mark" Property="Visibility" Value="Visible"/>
+              </Trigger>
+              <Trigger Property="HasContent" Value="False"><Setter TargetName="Cp" Property="Margin" Value="0"/></Trigger>
+              <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.4"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style TargetType="ComboBox">
+      <Setter Property="Foreground" Value="#E8EBF2"/><Setter Property="Background" Value="#161A21"/>
+      <Setter Property="BorderBrush" Value="#2A303C"/><Setter Property="MinHeight" Value="30"/>
+      <Setter Property="Cursor" Value="Hand"/><Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ComboBox">
+            <Grid>
+              <ToggleButton Focusable="False" ClickMode="Press" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                            IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                <ToggleButton.Template>
+                  <ControlTemplate TargetType="ToggleButton">
+                    <Border x:Name="Bd" CornerRadius="7" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1">
+                      <Path HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,11,0" Data="M0 0 L4.5 4.5 L9 0" Stroke="#8B93A5"
+                            StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                      <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="BorderBrush" Value="#3A4252"/></Trigger>
+                      <Trigger Property="IsChecked" Value="True"><Setter TargetName="Bd" Property="BorderBrush" Value="#5B8CFF"/></Trigger>
+                    </ControlTemplate.Triggers>
+                  </ControlTemplate>
+                </ToggleButton.Template>
+              </ToggleButton>
+              <ContentPresenter IsHitTestVisible="False" Margin="10,5,30,5" VerticalAlignment="Center" HorizontalAlignment="Left"
+                                Content="{TemplateBinding SelectionBoxItem}" ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}" ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"/>
+              <Popup x:Name="PART_Popup" IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom" AllowsTransparency="True" Focusable="False" PopupAnimation="Fade">
+                <Border Background="#1B1F28" BorderBrush="#2E3542" BorderThickness="1" CornerRadius="8" Padding="4" Margin="0,4,0,0"
+                        MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}" MaxHeight="{TemplateBinding MaxDropDownHeight}">
+                  <ScrollViewer SnapsToDevicePixels="True"><ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained"/></ScrollViewer>
+                </Border>
+              </Popup>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.45"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style TargetType="ComboBoxItem">
+      <Setter Property="Foreground" Value="#E8EBF2"/><Setter Property="Padding" Value="10,6"/><Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ComboBoxItem">
+            <Border x:Name="Bd" CornerRadius="5" Background="Transparent" Padding="{TemplateBinding Padding}"><ContentPresenter/></Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsSelected" Value="True"><Setter TargetName="Bd" Property="Background" Value="#1D2740"/></Trigger>
+              <Trigger Property="IsHighlighted" Value="True"><Setter TargetName="Bd" Property="Background" Value="#252C3B"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style TargetType="ListBox">
+      <Setter Property="Background" Value="#161A21"/><Setter Property="Foreground" Value="#E8EBF2"/>
+      <Setter Property="BorderBrush" Value="#262C38"/><Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="4"/><Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ListBox">
+            <Border CornerRadius="9" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
+              <ScrollViewer Focusable="False" Padding="{TemplateBinding Padding}"><ItemsPresenter/></ScrollViewer>
+            </Border>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style TargetType="ListBoxItem">
+      <Setter Property="Background" Value="Transparent"/><Setter Property="Padding" Value="8,6"/><Setter Property="Margin" Value="0,1"/>
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="BorderBrush" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/><Setter Property="FocusVisualStyle" Value="{x:Null}"/><Setter Property="SnapsToDevicePixels" Value="True"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ListBoxItem">
+            <Grid>
+              <Border x:Name="Bd" CornerRadius="6" Background="{TemplateBinding Background}"/>
+              <Border x:Name="Bar" Width="3" CornerRadius="1.5" HorizontalAlignment="Left" Margin="0,5" Background="{StaticResource LogoGrad}" Visibility="Collapsed"/>
+              <Border BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" Padding="{TemplateBinding Padding}">
+                <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="Center"/>
+              </Border>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="Background" Value="#1C212B"/></Trigger>
+              <Trigger Property="IsSelected" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="#1D2740"/><Setter TargetName="Bar" Property="Visibility" Value="Visible"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style TargetType="ScrollBar">
+      <Setter Property="Background" Value="Transparent"/><Setter Property="Width" Value="10"/><Setter Property="MinWidth" Value="10"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ScrollBar">
+            <Grid Background="{TemplateBinding Background}">
+              <Track x:Name="PART_Track" IsDirectionReversed="True">
+                <Track.DecreaseRepeatButton><RepeatButton Command="ScrollBar.PageUpCommand" Opacity="0" Focusable="False"/></Track.DecreaseRepeatButton>
+                <Track.IncreaseRepeatButton><RepeatButton Command="ScrollBar.PageDownCommand" Opacity="0" Focusable="False"/></Track.IncreaseRepeatButton>
+                <Track.Thumb>
+                  <Thumb><Thumb.Template><ControlTemplate TargetType="Thumb">
+                    <Border x:Name="T" CornerRadius="3" Background="#343B4A" Margin="2"/>
+                    <ControlTemplate.Triggers>
+                      <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="T" Property="Background" Value="#4A5367"/></Trigger>
+                      <Trigger Property="IsDragging" Value="True"><Setter TargetName="T" Property="Background" Value="#5B8CFF"/></Trigger>
+                    </ControlTemplate.Triggers>
+                  </ControlTemplate></Thumb.Template></Thumb>
+                </Track.Thumb>
+              </Track>
+            </Grid>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+      <Style.Triggers>
+        <Trigger Property="Orientation" Value="Horizontal">
+          <Setter Property="Width" Value="Auto"/><Setter Property="MinWidth" Value="0"/>
+          <Setter Property="Height" Value="10"/><Setter Property="MinHeight" Value="10"/>
+          <Setter Property="Template">
+            <Setter.Value>
+              <ControlTemplate TargetType="ScrollBar">
+                <Grid Background="{TemplateBinding Background}">
+                  <Track x:Name="PART_Track" IsDirectionReversed="False">
+                    <Track.DecreaseRepeatButton><RepeatButton Command="ScrollBar.PageLeftCommand" Opacity="0" Focusable="False"/></Track.DecreaseRepeatButton>
+                    <Track.IncreaseRepeatButton><RepeatButton Command="ScrollBar.PageRightCommand" Opacity="0" Focusable="False"/></Track.IncreaseRepeatButton>
+                    <Track.Thumb>
+                      <Thumb><Thumb.Template><ControlTemplate TargetType="Thumb">
+                        <Border x:Name="T" CornerRadius="3" Background="#343B4A" Margin="2"/>
+                        <ControlTemplate.Triggers>
+                          <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="T" Property="Background" Value="#4A5367"/></Trigger>
+                          <Trigger Property="IsDragging" Value="True"><Setter TargetName="T" Property="Background" Value="#5B8CFF"/></Trigger>
+                        </ControlTemplate.Triggers>
+                      </ControlTemplate></Thumb.Template></Thumb>
+                    </Track.Thumb>
+                  </Track>
+                </Grid>
+              </ControlTemplate>
+            </Setter.Value>
+          </Setter>
+        </Trigger>
+      </Style.Triggers>
+    </Style>
+'@
+
 # ---------- Window ----------
-[xml]$xaml = @'
+[xml]$xaml = (@'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Pimax Game Manager" Width="1020" Height="580" MinWidth="900" MinHeight="480"
-        Background="#1B1B1B" Foreground="#EDEDED" FontFamily="Segoe UI" FontSize="13" WindowStartupLocation="CenterScreen">
-  <Window.Resources>
-    <Style TargetType="Button">
-      <Setter Property="Background" Value="#2E2E2E"/><Setter Property="Foreground" Value="#EDEDED"/>
-      <Setter Property="BorderBrush" Value="#444"/><Setter Property="Padding" Value="14,7"/><Setter Property="Cursor" Value="Hand"/>
-    </Style>
-  </Window.Resources>
-  <Grid Margin="16">
-    <Grid.ColumnDefinitions><ColumnDefinition Width="280"/><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        Title="Pimax Game Manager" Width="1100" Height="700" MinWidth="960" MinHeight="580"
+        Background="#0E1014" Foreground="#E8EBF2" FontFamily="Segoe UI" FontSize="13" WindowStartupLocation="CenterScreen">
+  <Window.Resources>__THEME__</Window.Resources>
+  <Grid Margin="20,16,20,14">
+    <Grid.ColumnDefinitions><ColumnDefinition Width="350"/><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
 
-    <StackPanel Grid.Row="0" Grid.ColumnSpan="3">
-      <Border x:Name="UpdateBar" Visibility="Collapsed" Background="#0D2A45" BorderBrush="#1E88E5"
-              BorderThickness="1" CornerRadius="6" Padding="12,8" Margin="0,0,0,12">
+    <Grid Grid.Row="0" Grid.ColumnSpan="3" Margin="0,0,0,14">
+      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+      <DockPanel>
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoKey}" x:Name="KeyBtn" Content="SteamGridDB key"
+                  ToolTip="Add a free SteamGridDB API key for many more images"/>
+          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoPower}" x:Name="RestartBtn" Content="Restart Pimax Play" Margin="8,0,0,0"
+                  ToolTip="Restart Pimax Play without changing anything"/>
+        </StackPanel>
+        <Image Source="{StaticResource LogoImage}" Height="34" Margin="0,0,14,0" VerticalAlignment="Center"/>
+        <StackPanel VerticalAlignment="Center">
+          <TextBlock FontSize="21" FontWeight="SemiBold"><Run Text="Pimax"/><Run Text=" Game Manager" Foreground="{StaticResource LogoGrad}"/></TextBlock>
+          <TextBlock Text="Library images  &#183;  library order  &#183;  game settings  &#183;  backups" Foreground="#8B93A5" FontSize="12" Margin="1,1,0,0"/>
+        </StackPanel>
+      </DockPanel>
+      <Border Grid.Row="1" Height="1" Margin="0,14,0,0" Background="{StaticResource LineGrad}"/>
+    </Grid>
+
+    <StackPanel Grid.Row="1" Grid.ColumnSpan="3">
+      <Border x:Name="UpdateBar" Visibility="Collapsed" Background="#0F1D3A" BorderBrush="#2F4F8F"
+              BorderThickness="1" CornerRadius="9" Padding="14,9" Margin="0,0,0,12">
         <DockPanel>
-          <Button x:Name="UpdateClose" DockPanel.Dock="Right" Content="Later" Margin="8,0,0,0" Padding="12,4"/>
-          <Button x:Name="UpdateBtn" DockPanel.Dock="Right" Content="Download" Padding="12,4" Background="#1565C0" BorderBrush="#1E88E5" FontWeight="SemiBold"/>
+          <Button x:Name="UpdateClose" DockPanel.Dock="Right" Content="Later" Margin="8,0,0,0" Padding="12,5"/>
+          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoDownload}" x:Name="UpdateBtn" DockPanel.Dock="Right" Content="Download"
+                  Padding="12,5" Background="#2F6BFF" BorderBrush="#5B8CFF" FontWeight="SemiBold"/>
           <TextBlock x:Name="UpdateText" VerticalAlignment="Center" TextWrapping="Wrap"/>
         </DockPanel>
       </Border>
-      <Border x:Name="ResetBar" Visibility="Collapsed" Background="#3A2A10" BorderBrush="#FFB74D"
-              BorderThickness="1" CornerRadius="6" Padding="12,8" Margin="0,0,0,12">
+      <Border x:Name="ResetBar" Visibility="Collapsed" Background="#2D1E0E" BorderBrush="#7C4A1E"
+              BorderThickness="1" CornerRadius="9" Padding="14,9" Margin="0,0,0,12">
         <DockPanel>
-          <Button x:Name="ResetDismiss" DockPanel.Dock="Right" Content="Dismiss" Margin="8,0,0,0" Padding="12,4"/>
-          <Button x:Name="ResetRestore" DockPanel.Dock="Right" Content="Restore..." Padding="12,4" Background="#E65100" BorderBrush="#FFB74D" FontWeight="SemiBold"/>
+          <Button x:Name="ResetDismiss" DockPanel.Dock="Right" Content="Dismiss" Margin="8,0,0,0" Padding="12,5"/>
+          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoUndo}" x:Name="ResetRestore" DockPanel.Dock="Right" Content="Restore..."
+                  Padding="12,5" Background="#EA580C" BorderBrush="#FB923C" FontWeight="SemiBold"/>
           <TextBlock x:Name="ResetText" VerticalAlignment="Center" TextWrapping="Wrap"/>
         </DockPanel>
-      </Border>    </StackPanel>
-
-    <DockPanel Grid.Row="1" Grid.Column="0">
-      <TextBlock DockPanel.Dock="Top" Text="Your Pimax library" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,8"/>
-      <Grid DockPanel.Dock="Bottom" Margin="0,8,0,0">
-        <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="8"/><ColumnDefinition/></Grid.ColumnDefinitions>
-        <Grid.RowDefinitions><RowDefinition/><RowDefinition Height="8"/><RowDefinition/></Grid.RowDefinitions>
-        <Button x:Name="RefreshBtn" Grid.Column="0" Content="Refresh list"/>
-        <Button x:Name="OrderBtn" Grid.Column="2" Content="Library order..." Background="#1565C0" BorderBrush="#1E88E5"/>
-        <Button x:Name="SettingsBtn" Grid.Row="2" Grid.Column="0" Content="Game settings..." Background="#1565C0" BorderBrush="#1E88E5"/>
-        <Button x:Name="BackupBtn" Grid.Row="2" Grid.Column="2" Content="Backup &amp; restore..."/>
-      </Grid>
-      <ListBox x:Name="GameList" Background="#232323" Foreground="#EDEDED" BorderBrush="#3A3A3A"/>
-    </DockPanel>
-
-    <DockPanel Grid.Row="1" Grid.Column="2">
-      <TextBlock x:Name="GameTitle" DockPanel.Dock="Top" Text="Pick a game on the left" FontSize="18" FontWeight="SemiBold"/>
-      <TextBlock x:Name="GameInfo" DockPanel.Dock="Top" Foreground="#9A9A9A" Margin="0,2,0,10" TextWrapping="Wrap"/>
-      <StackPanel DockPanel.Dock="Bottom">
-        <TextBlock Text="New image: click Find image, paste a link, or browse for a file" Foreground="#BDBDBD" Margin="0,10,0,4"/>
-        <DockPanel>
-          <Button x:Name="FindBtn" DockPanel.Dock="Right" Content="Find image" Margin="8,0,0,0" Background="#1565C0" BorderBrush="#1E88E5" FontWeight="SemiBold"/>
-          <Button x:Name="BrowseBtn" DockPanel.Dock="Right" Content="Browse..." Margin="8,0,0,0"/>
-          <Button x:Name="PreviewBtn" DockPanel.Dock="Right" Content="Preview" Margin="8,0,0,0"/>
-          <TextBox x:Name="SourceBox" Background="#232323" Foreground="#EDEDED" BorderBrush="#3A3A3A" Padding="6,6" VerticalContentAlignment="Center"/>
-        </DockPanel>
-        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
-          <Button x:Name="ApplyBtn" Content="Apply image" Background="#2E7D32" BorderBrush="#43A047" FontWeight="SemiBold"/>
-          <Button x:Name="RestoreBtn" Content="Restore original" Margin="8,0,0,0"/>
-          <Button x:Name="RestartBtn" Content="Restart Pimax Play" Margin="8,0,0,0"/>
-          <Button x:Name="KeyBtn" Content="SteamGridDB key..." Margin="8,0,0,0"/>
-        </StackPanel>
-      </StackPanel>
-      <Border Background="#111" CornerRadius="8" BorderBrush="#333" BorderThickness="1">
-        <Grid>
-          <TextBlock x:Name="NoImage" Text="No custom image" Foreground="#666" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-          <Image x:Name="PreviewImg" Stretch="Uniform" Margin="6"/>
-        </Grid>
       </Border>
-    </DockPanel>
+    </StackPanel>
 
-    <DockPanel Grid.Row="2" Grid.ColumnSpan="3" Margin="0,12,0,0">
-      <TextBlock x:Name="VersionLabel" DockPanel.Dock="Right" Margin="16,0,0,0" Foreground="#8A8A8A" Cursor="Hand"
+    <Border Grid.Row="2" Grid.Column="0" Background="#14171E" BorderBrush="#222733" BorderThickness="1" CornerRadius="12" Padding="12">
+      <DockPanel>
+        <DockPanel DockPanel.Dock="Top" Margin="4,2,4,10">
+          <TextBlock x:Name="LibCount" DockPanel.Dock="Right" Foreground="#8B93A5" VerticalAlignment="Center"/>
+          <TextBlock Text="Your Pimax library" FontSize="15" FontWeight="SemiBold"/>
+        </DockPanel>
+        <Grid DockPanel.Dock="Bottom" Margin="0,10,0,0">
+          <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="8"/><ColumnDefinition/></Grid.ColumnDefinitions>
+          <Grid.RowDefinitions><RowDefinition/><RowDefinition Height="8"/><RowDefinition/></Grid.RowDefinitions>
+          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoList}" x:Name="OrderBtn" Grid.Column="0" Content="Library order..."
+                  Padding="8,8" Background="#1B2A4A" BorderBrush="#2F4F8F"/>
+          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoSliders}" x:Name="SettingsBtn" Grid.Column="2" Content="Game settings..."
+                  Padding="8,8" Background="#1B2A4A" BorderBrush="#2F4F8F"/>
+          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoRefresh}" x:Name="RefreshBtn" Grid.Row="2" Grid.Column="0" Content="Refresh list" Padding="8,8"/>
+          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoArchive}" x:Name="BackupBtn" Grid.Row="2" Grid.Column="2" Content="Backup &amp; restore..." Padding="8,8"/>
+        </Grid>
+        <ListBox x:Name="GameList" Background="Transparent" BorderThickness="0" Padding="0"/>
+      </DockPanel>
+    </Border>
+
+    <Border Grid.Row="2" Grid.Column="2" Background="#14171E" BorderBrush="#222733" BorderThickness="1" CornerRadius="12" Padding="18,16">
+      <DockPanel>
+        <TextBlock x:Name="GameTitle" DockPanel.Dock="Top" Text="Pick a game on the left" FontSize="20" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+        <TextBlock x:Name="GameInfo" DockPanel.Dock="Top" Foreground="#8B93A5" Margin="0,3,0,12" TextWrapping="Wrap"/>
+        <StackPanel DockPanel.Dock="Bottom">
+          <TextBlock Text="New image: click Find image, paste a link, or browse for a file" Foreground="#B4BCCC" Margin="0,14,0,6"/>
+          <DockPanel>
+            <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoSearch}" x:Name="FindBtn" DockPanel.Dock="Right" Content="Find image"
+                    Margin="8,0,0,0" Background="#2F6BFF" BorderBrush="#5B8CFF" FontWeight="SemiBold"/>
+            <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoFolder}" x:Name="BrowseBtn" DockPanel.Dock="Right" Content="Browse..." Margin="8,0,0,0"/>
+            <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoEye}" x:Name="PreviewBtn" DockPanel.Dock="Right" Content="Preview" Margin="8,0,0,0"/>
+            <TextBox x:Name="SourceBox"/>
+          </DockPanel>
+          <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+            <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoCheck}" x:Name="ApplyBtn" Content="Apply image"
+                    Background="#16A34A" BorderBrush="#22C55E" FontWeight="SemiBold"/>
+            <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoUndo}" x:Name="RestoreBtn" Content="Restore original" Margin="8,0,0,0"/>
+          </StackPanel>
+        </StackPanel>
+        <Border Background="#0A0C10" CornerRadius="10" BorderBrush="#222733" BorderThickness="1">
+          <Grid>
+            <StackPanel x:Name="NoImage" HorizontalAlignment="Center" VerticalAlignment="Center">
+              <Image Source="{StaticResource LogoImage}" Height="44" Opacity="0.18"/>
+              <TextBlock Text="No custom image" Foreground="#4B5263" HorizontalAlignment="Center" Margin="0,10,0,0"/>
+            </StackPanel>
+            <Image x:Name="PreviewImg" Stretch="Uniform" Margin="10"/>
+          </Grid>
+        </Border>
+      </DockPanel>
+    </Border>
+
+    <DockPanel Grid.Row="3" Grid.ColumnSpan="3" Margin="2,12,2,0">
+      <TextBlock x:Name="VersionLabel" DockPanel.Dock="Right" Margin="18,0,0,0" Foreground="#7A8397" Cursor="Hand"
                  VerticalAlignment="Bottom" ToolTip="Click to check for updates"/>
-      <TextBlock x:Name="ReportLink" DockPanel.Dock="Right" Margin="16,0,0,0" Foreground="#42A5F5" Cursor="Hand"
-                 VerticalAlignment="Bottom" Text="Report a problem" TextDecorations="Underline"
-                 ToolTip="Open a bug report on GitHub (needs a free GitHub account)"/>
-      <TextBlock x:Name="Status" Foreground="#8BC34A" TextWrapping="Wrap"
+      <TextBlock x:Name="ReportLink" DockPanel.Dock="Right" Margin="18,0,0,0" Foreground="#5B8CFF" Cursor="Hand"
+                 VerticalAlignment="Bottom" Text="Report a problem" ToolTip="Open a bug report on GitHub (needs a free GitHub account)"/>
+      <TextBlock x:Name="TutorialLink" DockPanel.Dock="Right" Margin="18,0,0,0" Foreground="#5B8CFF" Cursor="Hand"
+                 VerticalAlignment="Bottom" Text="Tutorial" ToolTip="Show the quick tour again"/>
+      <TextBlock x:Name="Status" Foreground="#4ADE80" TextWrapping="Wrap"
                  Text="Wide banner images (about 460x215 or 920x430) fit Pimax tiles best."/>
     </DockPanel>
   </Grid>
 </Window>
-'@
+'@).Replace('__THEME__', $ThemeXaml)
 $window = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $xaml))
 $ui = @{}
-foreach ($n in 'GameList','RefreshBtn','OrderBtn','SettingsBtn','GameTitle','GameInfo','SourceBox','BrowseBtn','PreviewBtn','FindBtn','KeyBtn','ApplyBtn','RestoreBtn','RestartBtn','PreviewImg','NoImage','Status','UpdateBar','UpdateText','UpdateBtn','UpdateClose','VersionLabel','ReportLink','BackupBtn','ResetBar','ResetText','ResetRestore','ResetDismiss') { $ui[$n] = $window.FindName($n) }
+foreach ($n in 'GameList','RefreshBtn','OrderBtn','SettingsBtn','GameTitle','GameInfo','SourceBox','BrowseBtn','PreviewBtn','FindBtn','KeyBtn','ApplyBtn','RestoreBtn','RestartBtn','PreviewImg','NoImage','Status','UpdateBar','UpdateText','UpdateBtn','UpdateClose','VersionLabel','ReportLink','TutorialLink','LibCount','BackupBtn','ResetBar','ResetText','ResetRestore','ResetDismiss') { $ui[$n] = $window.FindName($n) }
 $window.Title = "Pimax Game Manager $AppVersion"
+$window.Add_SourceInitialized({ Set-DarkTitleBar $this })
 
 # Window icon: the exe's own icon, or PimaxGameManager.ico next to the script
 $script:AppIcon = $null
@@ -687,7 +1024,7 @@ try {
 
 # ---------- Behaviour ----------
 function Set-Status([string]$msg, [bool]$isError = $false) {
-    $ui.Status.Foreground = if ($isError) { '#EF5350' } else { '#8BC34A' }
+    $ui.Status.Foreground = if ($isError) { '#F87171' } else { '#4ADE80' }
     $ui.Status.Text = $msg
     $window.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::Background)
 }
@@ -707,11 +1044,22 @@ function Fill-List {
     $ui.GameList.Items.Clear()
     foreach ($g in Get-PimaxGames) {
         $item = New-Object Windows.Controls.ListBoxItem
-        $item.Content = "{0}   ({1})" -f $g.Name, $g.Source
-        $item.Tag = $g; $item.Padding = '6,5'
+        $name = New-Object Windows.Controls.TextBlock
+        $name.Text = $g.Name; $name.TextTrimming = 'CharacterEllipsis'; $name.VerticalAlignment = 'Center'
+        $pal = switch ($g.Source) { 'Imported' { '#22D3EE', '#0F2A33' } 'SteamVR' { '#93B4FF', '#172340' } 'Oculus' { '#C4B5FD', '#231B3B' } default { '#9AA3B5', '#1F2430' } }
+        $badgeText = New-Object Windows.Controls.TextBlock
+        $badgeText.Text = $g.Source; $badgeText.FontSize = 11; $badgeText.Foreground = $pal[0]
+        $badge = New-Object Windows.Controls.Border
+        $badge.Child = $badgeText; $badge.Background = $pal[1]; $badge.CornerRadius = '4'; $badge.Padding = '6,1,6,2'; $badge.Margin = '8,0,0,0'; $badge.VerticalAlignment = 'Center'
+        $row = New-Object Windows.Controls.DockPanel
+        [Windows.Controls.DockPanel]::SetDock($badge, 'Right')
+        [void]$row.Children.Add($badge); [void]$row.Children.Add($name)
+        $item.Content = $row
+        $item.Tag = $g; $item.Padding = '10,7'
         [void]$ui.GameList.Items.Add($item)
         if ($g.File -eq $keep) { $ui.GameList.SelectedItem = $item }
     }
+    $ui.LibCount.Text = "$($ui.GameList.Items.Count) games"
 }
 
 $ui.GameList.Add_SelectionChanged({
@@ -776,26 +1124,27 @@ $ui.RestoreBtn.Add_Click({
 })
 
 function Show-Finder($game) {
-    [xml]$fx = @'
+    [xml]$fx = (@'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Find image" Width="1010" Height="660" Background="#1B1B1B" Foreground="#EDEDED"
+        Title="Find image" Width="1010" Height="660" Background="#0E1014" Foreground="#E8EBF2"
         FontFamily="Segoe UI" FontSize="13" WindowStartupLocation="CenterOwner">
-  <DockPanel Margin="14">
+  <Window.Resources>__THEME__</Window.Resources>
+  <DockPanel Margin="16">
     <DockPanel DockPanel.Dock="Top">
-      <Button x:Name="SearchBtn" DockPanel.Dock="Right" Content="Search by name" Margin="8,0,0,0" Padding="14,7"
-              Background="#2E2E2E" Foreground="#EDEDED" BorderBrush="#444" Cursor="Hand"/>
-      <TextBox x:Name="Term" Background="#232323" Foreground="#EDEDED" BorderBrush="#3A3A3A" Padding="6,6" VerticalContentAlignment="Center"/>
+      <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoSearch}" x:Name="SearchBtn" DockPanel.Dock="Right" Content="Search by name" Margin="8,0,0,0"/>
+      <TextBox x:Name="Term"/>
     </DockPanel>
-    <TextBlock x:Name="Note" DockPanel.Dock="Top" Foreground="#9A9A9A" Margin="0,8,0,8" TextWrapping="Wrap"/>
-    <TextBlock DockPanel.Dock="Bottom" Text="Click an image to use it." Foreground="#9A9A9A" Margin="0,8,0,0"/>
+    <TextBlock x:Name="Note" DockPanel.Dock="Top" Foreground="#8B93A5" Margin="0,8,0,8" TextWrapping="Wrap"/>
+    <TextBlock DockPanel.Dock="Bottom" Text="Click an image to use it." Foreground="#8B93A5" Margin="0,8,0,0"/>
     <ScrollViewer VerticalScrollBarVisibility="Auto"><WrapPanel x:Name="Results"/></ScrollViewer>
   </DockPanel>
 </Window>
-'@
+'@).Replace('__THEME__', $ThemeXaml)
     $fw = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $fx))
     $fw.Owner = $window
     if ($script:AppIcon) { $fw.Icon = $script:AppIcon }
+    $fw.Add_SourceInitialized({ Set-DarkTitleBar $this })
     $script:finderPick = $null
     $termBox = $fw.FindName('Term'); $noteBlock = $fw.FindName('Note'); $results = $fw.FindName('Results')
     $termBox.Text = $game.Name
@@ -812,12 +1161,12 @@ function Show-Finder($game) {
             $img = New-Object Windows.Controls.Image
             $img.Source = $bmp; $img.Width = 300; $img.Height = 140; $img.Stretch = 'Uniform'
             $cap = New-Object Windows.Controls.TextBlock
-            $cap.Text = $c.Label; $cap.Width = 300; $cap.TextTrimming = 'CharacterEllipsis'; $cap.Foreground = '#BDBDBD'; $cap.Margin = '0,4,0,0'
+            $cap.Text = $c.Label; $cap.Width = 300; $cap.TextTrimming = 'CharacterEllipsis'; $cap.Foreground = '#B4BCCC'; $cap.Margin = '0,4,0,0'
             $sp = New-Object Windows.Controls.StackPanel
             [void]$sp.Children.Add($img); [void]$sp.Children.Add($cap)
             $btn = New-Object Windows.Controls.Button
             $btn.Content = $sp; $btn.Tag = $c.Url; $btn.Margin = '6'; $btn.Padding = '6'
-            $btn.Background = '#232323'; $btn.BorderBrush = '#3A3A3A'; $btn.Cursor = 'Hand'; $btn.ToolTip = $c.Url
+            $btn.Background = '#161A21'; $btn.BorderBrush = '#262C38'; $btn.Cursor = 'Hand'; $btn.ToolTip = $c.Url
             $btn.Add_Click({ $script:finderPick = $this.Tag; $fw.Close() })
             [void]$results.Children.Add($btn)
         }
@@ -863,41 +1212,38 @@ function Get-ScrollViewer($el) {
 }
 
 function Show-Order {
-    [xml]$ox = @'
+    [xml]$ox = (@'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Library order" Width="780" Height="700" MinWidth="700" MinHeight="480" Background="#1B1B1B" Foreground="#EDEDED"
+        Title="Library order" Width="880" Height="720" MinWidth="740" MinHeight="480" Background="#0E1014" Foreground="#E8EBF2"
         FontFamily="Segoe UI" FontSize="13" WindowStartupLocation="CenterOwner">
-  <Window.Resources>
-    <Style TargetType="Button">
-      <Setter Property="Background" Value="#2E2E2E"/><Setter Property="Foreground" Value="#EDEDED"/>
-      <Setter Property="BorderBrush" Value="#444"/><Setter Property="Padding" Value="12,6"/><Setter Property="Cursor" Value="Hand"/>
-    </Style>
-  </Window.Resources>
-  <DockPanel Margin="14">
-    <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="#BDBDBD" Margin="0,0,0,10"
+  <Window.Resources>__THEME__</Window.Resources>
+  <DockPanel Margin="16">
+    <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="#B4BCCC" Margin="0,0,0,12"
       Text="Tick a game to pin it, and drag games to reorder. Pinned games show first in Pimax Play, in this order. Unticked games follow in Pimax's own order. Tip: Pin all, then drag, to control the whole library."/>
-    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
-      <Button x:Name="PinAll" Content="Pin all"/>
-      <Button x:Name="UnpinAll" Content="Unpin all" Margin="6,0,0,0"/>
-      <Button x:Name="SortAZ" Content="Sort A-Z" Margin="6,0,0,0"/>
-      <Button x:Name="Up" Content="Move up" Margin="18,0,0,0"/>
-      <Button x:Name="Down" Content="Move down" Margin="6,0,0,0"/>
-      <Button x:Name="Top" Content="Move to top" Margin="6,0,0,0"/>
-      <Button x:Name="Bottom" Content="Move to bottom" Margin="6,0,0,0"/>
-    </StackPanel>
-    <DockPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
+    <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,4">
+      <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoPin}" x:Name="PinAll" Content="Pin all" Margin="0,0,6,6"/>
+      <Button x:Name="UnpinAll" Content="Unpin all" Margin="0,0,6,6"/>
+      <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoSort}" x:Name="SortAZ" Content="Sort A-Z" Margin="0,0,18,6"/>
+      <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoUp}" x:Name="Up" Content="Move up" Margin="0,0,6,6"/>
+      <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoDown}" x:Name="Down" Content="Move down" Margin="0,0,6,6"/>
+      <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoTop}" x:Name="Top" Content="Move to top" Margin="0,0,6,6"/>
+      <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoBottom}" x:Name="Bottom" Content="Move to bottom" Margin="0,0,6,6"/>
+    </WrapPanel>
+    <DockPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
       <Button x:Name="Cancel" DockPanel.Dock="Right" Content="Cancel" Margin="8,0,0,0"/>
-      <Button x:Name="Save" DockPanel.Dock="Right" Content="Save and restart Pimax Play" Background="#2E7D32" BorderBrush="#43A047" FontWeight="SemiBold"/>
-      <TextBlock x:Name="Count" VerticalAlignment="Center" Foreground="#9A9A9A"/>
+      <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoCheck}" x:Name="Save" DockPanel.Dock="Right" Content="Save and restart Pimax Play"
+              Background="#16A34A" BorderBrush="#22C55E" FontWeight="SemiBold"/>
+      <TextBlock x:Name="Count" VerticalAlignment="Center" Foreground="#8B93A5"/>
     </DockPanel>
-    <ListBox x:Name="Order" Background="#232323" Foreground="#EDEDED" BorderBrush="#3A3A3A" AllowDrop="True"/>
+    <ListBox x:Name="Order" AllowDrop="True"/>
   </DockPanel>
 </Window>
-'@
+'@).Replace('__THEME__', $ThemeXaml)
     $script:ow = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $ox))
     if ($window.IsLoaded) { $script:ow.Owner = $window }
     if ($script:AppIcon) { $script:ow.Icon = $script:AppIcon }
+    $script:ow.Add_SourceInitialized({ Set-DarkTitleBar $this })
     $script:lb = $script:ow.FindName('Order'); $script:count = $script:ow.FindName('Count')
 
     $games = @(Get-PimaxGames | ForEach-Object { $_ | Add-Member -NotePropertyName Id -NotePropertyValue (Get-GameId $_) -PassThru })
@@ -918,7 +1264,7 @@ function Show-Order {
         $name = New-Object Windows.Controls.TextBlock
         $name.Text = $g.Name; $name.VerticalAlignment = 'Center'
         $src = New-Object Windows.Controls.TextBlock
-        $src.Text = "   $($g.Source)"; $src.Foreground = '#8A8A8A'; $src.VerticalAlignment = 'Center'
+        $src.Text = "   $($g.Source)"; $src.Foreground = '#7A8397'; $src.VerticalAlignment = 'Center'
         $grip = New-Object Windows.Controls.TextBlock
         $grip.Text = [string][char]0x2261; $grip.Foreground = '#777'; $grip.FontSize = 16; $grip.Margin = '0,0,10,0'; $grip.VerticalAlignment = 'Center'
         $row = New-Object Windows.Controls.StackPanel
@@ -951,8 +1297,8 @@ function Show-Order {
     # Drag visuals: a floating label with the game's name, and a blue line where it will land
     $ghostText = New-Object Windows.Controls.TextBlock; $ghostText.Foreground = 'White'; $ghostText.FontWeight = 'SemiBold'
     $ghostBox = New-Object Windows.Controls.Border
-    $ghostBox.Background = New-Object Windows.Media.SolidColorBrush([Windows.Media.Color]::FromArgb(230, 21, 101, 192))
-    $ghostBox.BorderBrush = '#90CAF9'; $ghostBox.BorderThickness = '1'; $ghostBox.CornerRadius = '4'; $ghostBox.Padding = '10,5'
+    $ghostBox.Background = New-Object Windows.Media.SolidColorBrush([Windows.Media.Color]::FromArgb(235, 47, 107, 255))
+    $ghostBox.BorderBrush = '#A5C0FF'; $ghostBox.BorderThickness = '1'; $ghostBox.CornerRadius = '4'; $ghostBox.Padding = '10,5'
     $ghostBox.Child = $ghostText
     $script:orderGhost = New-Object Windows.Controls.Primitives.Popup
     $script:orderGhost.Child = $ghostBox; $script:orderGhost.AllowsTransparency = $true; $script:orderGhost.IsHitTestVisible = $false
@@ -971,7 +1317,7 @@ function Show-Order {
         if (-not $over -or $over -eq $src) { & $script:clearMark; return }
         if ($over -ne $script:orderMark) { & $script:clearMark }
         $below = $script:lb.Items.IndexOf($src) -lt $script:lb.Items.IndexOf($over)
-        $over.BorderBrush = '#42A5F5'
+        $over.BorderBrush = '#5B8CFF'
         $over.BorderThickness = $(if ($below) { '0,0,0,4' } else { '0,4,0,0' })
         $script:orderMark = $over
     }
@@ -1089,21 +1435,16 @@ function New-DarkWindow([string]$title, [int]$w, [int]$h, [string]$body) {
     [xml]$x = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="$title" Width="$w" Height="$h" MinWidth="560" MinHeight="420" Background="#1B1B1B" Foreground="#EDEDED"
+        Title="$title" Width="$w" Height="$h" MinWidth="560" MinHeight="420" Background="#0E1014" Foreground="#E8EBF2"
         FontFamily="Segoe UI" FontSize="13" WindowStartupLocation="CenterOwner">
-  <Window.Resources>
-    <Style TargetType="Button">
-      <Setter Property="Background" Value="#2E2E2E"/><Setter Property="Foreground" Value="#EDEDED"/>
-      <Setter Property="BorderBrush" Value="#444"/><Setter Property="Padding" Value="12,6"/><Setter Property="Cursor" Value="Hand"/>
-    </Style>
-    <Style TargetType="CheckBox"><Setter Property="Foreground" Value="#EDEDED"/></Style>
-  </Window.Resources>
+  <Window.Resources>$ThemeXaml</Window.Resources>
   $body
 </Window>
 "@
     $win = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $x))
     if ($window.IsLoaded) { $win.Owner = $window }
     if ($script:AppIcon) { $win.Icon = $script:AppIcon }
+    $win.Add_SourceInitialized({ Set-DarkTitleBar $this })
     return $win
 }
 
@@ -1111,15 +1452,15 @@ function New-DarkWindow([string]$title, [int]$w, [int]$h, [string]$body) {
 function Select-Games([string]$title, [string]$prompt, [string[]]$exclude) {
     $script:pw = New-DarkWindow $title 480 600 @'
   <DockPanel Margin="14">
-    <TextBlock x:Name="Prompt" DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="#BDBDBD" Margin="0,0,0,8"/>
+    <TextBlock x:Name="Prompt" DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="#B4BCCC" Margin="0,0,0,8"/>
     <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
       <Button x:Name="All" Content="Select all"/><Button x:Name="None" Content="Select none" Margin="6,0,0,0"/>
     </StackPanel>
     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
-      <Button x:Name="Ok" Content="OK" Background="#2E7D32" BorderBrush="#43A047" FontWeight="SemiBold"/>
+      <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoCheck}" x:Name="Ok" Content="OK" Background="#16A34A" BorderBrush="#22C55E" FontWeight="SemiBold"/>
       <Button x:Name="Cancel" Content="Cancel" Margin="8,0,0,0"/>
     </StackPanel>
-    <ListBox x:Name="List" Background="#232323" Foreground="#EDEDED" BorderBrush="#3A3A3A"/>
+    <ListBox x:Name="List" Background="#161A21" Foreground="#E8EBF2" BorderBrush="#262C38"/>
   </DockPanel>
 '@
     $script:pw.FindName('Prompt').Text = $prompt
@@ -1145,24 +1486,24 @@ function Show-GameSettings([string]$startId) {
     <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
     <DockPanel Grid.Column="0">
       <TextBlock DockPanel.Dock="Top" Text="Games" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,8"/>
-      <Button x:Name="Leftovers" DockPanel.Dock="Bottom" Content="Remove leftover settings..." Margin="0,8,0,0"/>
-      <ListBox x:Name="Targets" Background="#232323" Foreground="#EDEDED" BorderBrush="#3A3A3A"/>
+      <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoTrash}" x:Name="Leftovers" DockPanel.Dock="Bottom" Content="Remove leftover settings..." Margin="0,8,0,0"/>
+      <ListBox x:Name="Targets" Background="#161A21" Foreground="#E8EBF2" BorderBrush="#262C38"/>
     </DockPanel>
     <DockPanel Grid.Column="2">
       <TextBlock x:Name="Title" DockPanel.Dock="Top" FontSize="18" FontWeight="SemiBold"/>
-      <TextBlock x:Name="Info" DockPanel.Dock="Top" Foreground="#9A9A9A" TextWrapping="Wrap" Margin="0,2,0,10"/>
+      <TextBlock x:Name="Info" DockPanel.Dock="Top" Foreground="#8B93A5" TextWrapping="Wrap" Margin="0,2,0,10"/>
       <DockPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
-        <Button x:Name="Save" DockPanel.Dock="Right" Content="Save all changes" Background="#2E7D32" BorderBrush="#43A047" FontWeight="SemiBold"/>
-        <Button x:Name="DiscardAll" DockPanel.Dock="Right" Content="Discard all" Margin="0,0,8,0"/>
+        <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoSave}" x:Name="Save" DockPanel.Dock="Right" Content="Save all changes" Background="#16A34A" BorderBrush="#22C55E" FontWeight="SemiBold"/>
+        <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoClose}" x:Name="DiscardAll" DockPanel.Dock="Right" Content="Discard all" Margin="0,0,8,0"/>
         <StackPanel Orientation="Horizontal">
-          <Button x:Name="Revert" Content="Undo this game"/>
-          <Button x:Name="Reset" Content="Reset to global" Margin="8,0,0,0"/>
-          <Button x:Name="CopyAll" Content="Copy all settings to..." Margin="8,0,0,0" Background="#1565C0" BorderBrush="#1E88E5"/>
+          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoUndo}" x:Name="Revert" Content="Undo this game"/>
+          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoRefresh}" x:Name="Reset" Content="Reset to global" Margin="8,0,0,0"/>
+          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoCopy}" x:Name="CopyAll" Content="Copy all settings to..." Margin="8,0,0,0" Background="#2F6BFF" BorderBrush="#5B8CFF"/>
         </StackPanel>
       </DockPanel>
       <ScrollViewer VerticalScrollBarVisibility="Auto"><Grid x:Name="Rows"/></ScrollViewer>
     </DockPanel>
-    <TextBlock x:Name="Status" Grid.Row="1" Grid.ColumnSpan="3" Margin="0,10,0,0" Foreground="#8BC34A" TextWrapping="Wrap"
+    <TextBlock x:Name="Status" Grid.Row="1" Grid.ColumnSpan="3" Margin="0,10,0,0" Foreground="#4ADE80" TextWrapping="Wrap"
       Text="Tick 'Custom' to give a game its own value. Changes are kept as you move between games; click Save all changes when you're done."/>
   </Grid>
 '@
@@ -1170,7 +1511,7 @@ function Show-GameSettings([string]$startId) {
     $script:gsTitle = $script:sw.FindName('Title'); $script:gsInfo = $script:sw.FindName('Info'); $script:gsStatus = $script:sw.FindName('Status')
     $script:gsSaveBtn = $script:sw.FindName('Save'); $script:gsResetBtn = $script:sw.FindName('Reset')
     $script:gsPending = [ordered]@{}
-    $script:gsSay = { param([string]$m, [bool]$bad = $false) $script:gsStatus.Foreground = $(if ($bad) { '#EF5350' } else { '#8BC34A' }); $script:gsStatus.Text = $m }
+    $script:gsSay = { param([string]$m, [bool]$bad = $false) $script:gsStatus.Foreground = $(if ($bad) { '#F87171' } else { '#4ADE80' }); $script:gsStatus.Text = $m }
 
     $script:gsGames = @(Get-PimaxGames | ForEach-Object { $_ | Add-Member -NotePropertyName Id -NotePropertyValue (Get-GameId $_) -PassThru -Force } | Sort-Object Name)
     $gItem = New-Object Windows.Controls.ListBoxItem
@@ -1202,7 +1543,7 @@ function Show-GameSettings([string]$startId) {
             $ctl.Add_TextChanged({ & $script:gsChanged $this.Tag })
         }
         $ctl.Tag = $row; $ctl.Margin = '0,5'; $ctl.VerticalAlignment = 'Center'
-        $hint = New-Object Windows.Controls.TextBlock; $hint.Foreground = '#8A8A8A'; $hint.VerticalAlignment = 'Center'; $hint.Margin = '12,0,8,0'; $hint.TextTrimming = 'CharacterEllipsis'
+        $hint = New-Object Windows.Controls.TextBlock; $hint.Foreground = '#7A8397'; $hint.VerticalAlignment = 'Center'; $hint.Margin = '12,0,8,0'; $hint.TextTrimming = 'CharacterEllipsis'
         $ab = New-Object Windows.Controls.Button; $ab.Content = 'Apply to...'; $ab.Padding = '8,3'; $ab.Margin = '0,5'; $ab.Tag = $row
         $ab.ToolTip = "Use this $($def.Label) on other games"
         $ab.Add_Click({ & $script:gsApplyRow $this.Tag })
@@ -1258,7 +1599,7 @@ function Show-GameSettings([string]$startId) {
                 if ($script:gsPending.Contains($id)) { $custom = $script:gsPending[$id].Count -gt 0 } else { $custom = Test-Path -LiteralPath (Get-SettingsPath $id) }
             }
             $it.Content = $base + $(if ($custom) { '   *' } else { '' }) + $(if ($unsaved) { '   (unsaved)' } else { '' })
-            $it.Foreground = $(if ($unsaved) { '#FFB74D' } else { '#EDEDED' })
+            $it.Foreground = $(if ($unsaved) { '#FB923C' } else { '#E8EBF2' })
             $it.ToolTip = $(if ($id -eq 'global') { 'Default settings for every game' } elseif ($custom) { 'Has its own settings' } else { 'Uses global settings' })
         }
         $n = $script:gsPending.Count
@@ -1476,16 +1817,16 @@ function Format-SnapshotLine($s) {
 function Show-Backups($preselect, $lost) {
     $script:bw = New-DarkWindow 'Backup & restore' 900 600 @'
   <DockPanel Margin="14">
-    <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="#BDBDBD" Margin="0,0,0,10"
+    <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="#B4BCCC" Margin="0,0,0,10"
       Text="A backup of your library images, library order, game settings and headset settings (eye-tracking calibration, IPD and headset profile, play area) is saved automatically every time you change them here, and when you open the app. If a Pimax update resets them, pick a backup and restore it."/>
-    <TextBlock x:Name="BStatus" DockPanel.Dock="Bottom" Margin="0,10,0,0" Foreground="#8BC34A" TextWrapping="Wrap"/>
+    <TextBlock x:Name="BStatus" DockPanel.Dock="Bottom" Margin="0,10,0,0" Foreground="#4ADE80" TextWrapping="Wrap"/>
     <DockPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
       <Button x:Name="BClose" DockPanel.Dock="Right" Content="Close" Margin="8,0,0,0"/>
-      <Button x:Name="BRestore" DockPanel.Dock="Right" Content="Restore selected" Background="#E65100" BorderBrush="#FFB74D" FontWeight="SemiBold"/>
+      <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoUndo}" x:Name="BRestore" DockPanel.Dock="Right" Content="Restore selected" Background="#EA580C" BorderBrush="#FB923C" FontWeight="SemiBold"/>
       <StackPanel Orientation="Horizontal">
-        <Button x:Name="BNow" Content="Back up now" Background="#2E7D32" BorderBrush="#43A047"/>
-        <Button x:Name="BOpen" Content="Open backup folder" Margin="8,0,0,0"/>
-        <Button x:Name="BDelete" Content="Delete selected" Margin="8,0,0,0" Background="#5D1F1F" BorderBrush="#C62828"/>
+        <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoArchive}" x:Name="BNow" Content="Back up now" Background="#16A34A" BorderBrush="#22C55E"/>
+        <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoFolder}" x:Name="BOpen" Content="Open backup folder" Margin="8,0,0,0"/>
+        <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoTrash}" x:Name="BDelete" Content="Delete selected" Margin="8,0,0,0" Background="#4C1616" BorderBrush="#DC2626"/>
       </StackPanel>
     </DockPanel>
     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,10,0,0">
@@ -1495,11 +1836,11 @@ function Show-Backups($preselect, $lost) {
       <CheckBox x:Name="BSettings" Content="Game settings" IsChecked="True" Margin="0,0,16,0"/>
       <CheckBox x:Name="BHeadset" Content="Headset (eye tracking, IPD, play area)" IsChecked="True"/>
     </StackPanel>
-    <ListBox x:Name="BList" SelectionMode="Extended" Background="#232323" Foreground="#EDEDED" BorderBrush="#3A3A3A" ToolTip="Ctrl-click or Shift-click to select several backups"/>
+    <ListBox x:Name="BList" SelectionMode="Extended" Background="#161A21" Foreground="#E8EBF2" BorderBrush="#262C38" ToolTip="Ctrl-click or Shift-click to select several backups"/>
   </DockPanel>
 '@
     $script:bList = $script:bw.FindName('BList'); $script:bStatus = $script:bw.FindName('BStatus')
-    $script:bSay = { param([string]$m, [bool]$bad = $false) $script:bStatus.Foreground = $(if ($bad) { '#EF5350' } else { '#8BC34A' }); $script:bStatus.Text = $m }
+    $script:bSay = { param([string]$m, [bool]$bad = $false) $script:bStatus.Foreground = $(if ($bad) { '#F87171' } else { '#4ADE80' }); $script:bStatus.Text = $m }
     $script:bFill = {
         param($selectPath)
         $script:bList.Items.Clear()
@@ -1588,7 +1929,103 @@ function Start-BackupCheck {
 }
 $ui.ResetRestore.Add_Click({ try { Show-Backups $script:ResetSnap $script:ResetLost } catch { Set-Status "Backup & restore failed: $($_.Exception.Message)" $true } })
 $ui.ResetDismiss.Add_Click({ if ($script:ResetSnap) { Set-AppSetting 'dismissedSnapshot' $script:ResetSnap.created }; $ui.ResetBar.Visibility = 'Collapsed' })
-$window.Add_Loaded({ $window.Dispatcher.BeginInvoke([action]{ Start-BackupCheck }, [Windows.Threading.DispatcherPriority]::ApplicationIdle) | Out-Null })
+$window.Add_Loaded({ if ($Test) { return }; $window.Dispatcher.BeginInvoke([action]{ Start-BackupCheck }, [Windows.Threading.DispatcherPriority]::ApplicationIdle) | Out-Null })
+
+# ---------- Tutorial (shown at startup until the user turns it off) ----------
+$TutorialSteps = @(
+    @{ Icon = 'Logo'; Title = 'Welcome to Pimax Game Manager'
+       Body = "Keep your Pimax Play library the way you want it: your own tile images, your own order, graphics settings for many games at once, and backups that a Pimax update can't wipe.`n`nThis quick tour takes about a minute." },
+    @{ Icon = 'IcoImage'; Title = 'Custom library images'
+       Body = "Pick an imported game on the left, then click Find image to search Steam and SteamGridDB, paste an image link, or Browse for a file. Click Apply image to use it.`n`nSteam and Oculus games get their image from the store every time Pimax starts. To give one your own image, add it with Import in Pimax Play." },
+    @{ Icon = 'IcoList'; Title = 'Library order'
+       Body = "Library order lets you tick games to pin them and drag them into any order. Pinned games always show first in Pimax Play.`n`nTip: click Pin all, then drag, to control the whole list." },
+    @{ Icon = 'IcoSliders'; Title = 'Game settings'
+       Body = "Edit Pimax's per-game graphics settings in one place. Tick Custom to give a game its own value; everything else follows Global.`n`nApply to... copies one setting to other games, and nothing is written until you click Save all changes." },
+    @{ Icon = 'IcoArchive'; Title = 'Backups'
+       Body = "A backup is saved automatically whenever you change something here. If a Pimax update resets your images, order, settings or headset setup, an orange bar offers to put them back.`n`nYou can also restore any backup yourself from Backup & restore." },
+    @{ Icon = 'IcoPower'; Title = 'Before you apply changes'
+       Body = "Saving changes restarts Pimax Play and its service so they take effect, so do it when you're not in a game.`n`nYou can open this tour again any time from Tutorial at the bottom of the window." }
+)
+
+function Show-Tutorial {
+    $script:tw = New-DarkWindow 'Welcome to Pimax Game Manager' 680 470 @'
+  <Grid>
+    <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+    <Grid Margin="30,28,30,12">
+      <Grid.ColumnDefinitions><ColumnDefinition Width="150"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+      <Grid Width="120" Height="120" VerticalAlignment="Top" HorizontalAlignment="Left">
+        <Ellipse Fill="{StaticResource LogoGrad}" Opacity="0.12"/>
+        <Ellipse Stroke="{StaticResource LogoGrad}" StrokeThickness="1.5" Opacity="0.55"/>
+        <Image x:Name="TLogo" Source="{StaticResource LogoImage}" Width="82"/>
+        <Viewbox x:Name="TIconBox" Width="52" Height="52">
+          <Canvas Width="24" Height="24">
+            <Path x:Name="TIcon" Stroke="{StaticResource LogoGrad}" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
+          </Canvas>
+        </Viewbox>
+      </Grid>
+      <StackPanel Grid.Column="1">
+        <TextBlock x:Name="TStep" Foreground="#5B8CFF" FontSize="11" FontWeight="SemiBold"/>
+        <TextBlock x:Name="TTitle" FontSize="22" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,4,0,12"/>
+        <TextBlock x:Name="TBody" Foreground="#C4CAD6" FontSize="14" TextWrapping="Wrap" LineHeight="21"/>
+      </StackPanel>
+    </Grid>
+    <Border Grid.Row="1" Background="#14171E" BorderBrush="#222733" BorderThickness="0,1,0,0" Padding="20,14">
+      <DockPanel>
+        <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoArrowRight}" x:Name="TNext" DockPanel.Dock="Right" Content="Next"
+                Background="#2F6BFF" BorderBrush="#5B8CFF" FontWeight="SemiBold" Margin="8,0,0,0" MinWidth="100"/>
+        <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoArrowLeft}" x:Name="TBack" DockPanel.Dock="Right" Content="Back"/>
+        <CheckBox x:Name="THide" Content="Don't show this at startup" VerticalAlignment="Center"/>
+        <StackPanel x:Name="TDots" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+      </DockPanel>
+    </Border>
+  </Grid>
+'@
+    $script:tw.ResizeMode = 'NoResize'
+    $script:tIndex = 0
+    $script:tHide = $script:tw.FindName('THide')
+    $script:tHide.IsChecked = [bool](Get-AppSetting 'hideTutorial')
+    $script:tRender = {
+        $w = $script:tw; $s = $TutorialSteps[$script:tIndex]; $last = ($script:tIndex -eq $TutorialSteps.Count - 1)
+        $w.FindName('TStep').Text = "STEP $($script:tIndex + 1) OF $($TutorialSteps.Count)"
+        $w.FindName('TTitle').Text = $s.Title
+        $w.FindName('TBody').Text = $s.Body
+        $isLogo = ($s.Icon -eq 'Logo')
+        $w.FindName('TLogo').Visibility = $(if ($isLogo) { 'Visible' } else { 'Collapsed' })
+        $w.FindName('TIconBox').Visibility = $(if ($isLogo) { 'Collapsed' } else { 'Visible' })
+        if (-not $isLogo) { $w.FindName('TIcon').Data = $w.FindResource($s.Icon) }
+        $w.FindName('TBack').Visibility = $(if ($script:tIndex -gt 0) { 'Visible' } else { 'Hidden' })
+        $next = $w.FindName('TNext')
+        $next.Content = $(if ($last) { 'Get started' } else { 'Next' })
+        $next.Tag = $w.FindResource($(if ($last) { 'IcoCheck' } else { 'IcoArrowRight' }))
+        $dots = $w.FindName('TDots'); $dots.Children.Clear()
+        for ($i = 0; $i -lt $TutorialSteps.Count; $i++) {
+            $d = New-Object Windows.Controls.Border
+            $d.Height = 7; $d.CornerRadius = '3.5'; $d.Margin = '3,0'
+            $d.Width = $(if ($i -eq $script:tIndex) { 20 } else { 7 })
+            $d.Background = $(if ($i -eq $script:tIndex) { '#5B8CFF' } else { '#2E3542' })
+            [void]$dots.Children.Add($d)
+        }
+    }
+    $script:tGo = {
+        param([int]$step)
+        $n = $script:tIndex + $step
+        if ($n -lt 0) { return }
+        if ($n -ge $TutorialSteps.Count) { $script:tw.Close(); return }
+        $script:tIndex = $n; & $script:tRender
+    }
+    $script:tw.FindName('TNext').Add_Click({ & $script:tGo 1 })
+    $script:tw.FindName('TBack').Add_Click({ & $script:tGo -1 })
+    $script:tw.Add_PreviewKeyDown({
+        if ($_.Key -eq 'Right') { & $script:tGo 1; $_.Handled = $true }
+        elseif ($_.Key -eq 'Left') { & $script:tGo -1; $_.Handled = $true }
+        elseif ($_.Key -eq 'Escape') { $script:tw.Close() }
+    })
+    # Remember the "don't show at startup" choice (never in test mode)
+    $script:tw.Add_Closed({ if (-not $Test) { try { Set-AppSetting 'hideTutorial' ([bool]$script:tHide.IsChecked) } catch { } } })
+    & $script:tRender
+    if ($script:Capture -or $Test) { return $script:tw }
+    [void]$script:tw.ShowDialog()
+}
 
 # ---------- Update check ----------
 function Get-UpdateInfo($release) {
@@ -1602,10 +2039,10 @@ function Set-VersionLabel([string]$state) {
     $l = $ui.VersionLabel
     $l.TextDecorations = $null
     switch ($state) {
-        'checking'  { $l.Text = "v$AppVersion  -  Checking for updates..."; $l.Foreground = '#8A8A8A' }
-        'current'   { $l.Text = "v$AppVersion  -  Up to date " + [char]0x2713; $l.Foreground = '#8BC34A' }
-        'available' { $l.Text = "v$AppVersion  -  Update available"; $l.Foreground = '#42A5F5'; $l.TextDecorations = [Windows.TextDecorations]::Underline }
-        default     { $l.Text = "v$AppVersion  -  Couldn't check for updates"; $l.Foreground = '#8A8A8A' }
+        'checking'  { $l.Text = "v$AppVersion  -  Checking for updates..."; $l.Foreground = '#7A8397' }
+        'current'   { $l.Text = "v$AppVersion  -  Up to date " + [char]0x2713; $l.Foreground = '#4ADE80' }
+        'available' { $l.Text = "v$AppVersion  -  Update available"; $l.Foreground = '#5B8CFF'; $l.TextDecorations = [Windows.TextDecorations]::Underline }
+        default     { $l.Text = "v$AppVersion  -  Couldn't check for updates"; $l.Foreground = '#7A8397' }
     }
     $script:VersionState = $state
 }
@@ -1654,7 +2091,9 @@ $ui.VersionLabel.Add_MouseLeftButtonUp({
     if ($script:VersionState -eq 'available' -and $script:UpdateUrl) { Start-Process $script:UpdateUrl }
     else { Start-UpdateCheck }
 })
-$window.Add_Loaded({ Start-UpdateCheck })
+$window.Add_Loaded({ if (-not $Test) { Start-UpdateCheck } })
+$window.Add_Loaded({ if ($Test -or (Get-AppSetting 'hideTutorial')) { return }; $window.Dispatcher.BeginInvoke([action]{ try { Show-Tutorial } catch { } }, [Windows.Threading.DispatcherPriority]::ApplicationIdle) | Out-Null })
+$ui.TutorialLink.Add_MouseLeftButtonUp({ try { Show-Tutorial } catch { Set-Status "Tutorial failed: $($_.Exception.Message)" $true } })
 
 $ui.RestartBtn.Add_Click({ Finish-Restart 'Pimax Play restarted.' })
 $ui.RefreshBtn.Add_Click({ Fill-List; Set-Status 'Library list refreshed.' })
@@ -1663,10 +2102,40 @@ Fill-List
 if ($ui.GameList.Items.Count -eq 0) { Set-Status "No games found in $ManifestDir - is Pimax Play installed?" $true }
 
 if ($Test) {
+    if ($env:PGM_SHOTS) {
+        # Screenshot mode: render each window off-screen to PNG files (nothing is changed)
+        $shotDir = $env:PGM_SHOTS; New-Item -ItemType Directory -Force $shotDir | Out-Null
+        function Save-Shot($w, [string]$name) {
+            if (-not $w.IsVisible) { $w.WindowStartupLocation = 'Manual'; $w.Left = -20000; $w.Top = -20000; $w.ShowActivated = $false; $w.ShowInTaskbar = $false; $w.Show() }
+            for ($i = 0; $i -lt 4; $i++) { $w.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::ContextIdle); Start-Sleep -Milliseconds 150 }
+            $root = [Windows.Media.VisualTreeHelper]::GetChild($w, 0)
+            $wd = [Math]::Ceiling($root.ActualWidth); $ht = [Math]::Ceiling($root.ActualHeight)
+            $dv = New-Object Windows.Media.DrawingVisual; $dc = $dv.RenderOpen()
+            $rect = New-Object Windows.Rect(0, 0, $wd, $ht)
+            $dc.DrawRectangle($w.Background, $null, $rect); $dc.DrawRectangle((New-Object Windows.Media.VisualBrush($root)), $null, $rect); $dc.Close()
+            $rtb = New-Object Windows.Media.Imaging.RenderTargetBitmap([int]$wd, [int]$ht, 96, 96, [Windows.Media.PixelFormats]::Pbgra32); $rtb.Render($dv)
+            $enc = New-Object Windows.Media.Imaging.PngBitmapEncoder; $enc.Frames.Add([Windows.Media.Imaging.BitmapFrame]::Create($rtb))
+            $fs = [IO.File]::Create((Join-Path $shotDir "$name.png")); try { $enc.Save($fs) } finally { $fs.Close() }
+            "  shot: $name ($wd x $ht)"
+        }
+        $pick = $ui.GameList.Items | Where-Object { $_.Tag.Source -eq 'Imported' -and $_.Tag.Icon } | Select-Object -First 1
+        if ($pick) { $ui.GameList.SelectedItem = $pick }
+        Save-Shot $window 'main'
+        $tw = Show-Tutorial; Save-Shot $tw 'tutorial-1'
+        $script:tIndex = 1; & $script:tRender; Save-Shot $tw 'tutorial-2'
+        $script:tIndex = 5; & $script:tRender; Save-Shot $tw 'tutorial-6'
+        $tw.Close()
+        [void](Show-Order); Save-Shot $script:ow 'order'; $script:ow.Close()
+        $sid = if ($pick) { Get-GameId $pick.Tag } else { 'global' }
+        $sw = Show-GameSettings $sid; Save-Shot $sw 'settings'; $sw.Close()
+        $bw = Show-Backups $null $null; Save-Shot $bw 'backups'; $bw.Close()
+        $window.Close()
+        return
+    }
     "TEST OK: window built, $($ui.GameList.Items.Count) games listed"
     foreach ($item in $ui.GameList.Items) {
         $g = $item.Tag
-        "  {0,-45} Steam app: {1}" -f $item.Content, (Resolve-SteamAppId $g)
+        "  {0,-45} Steam app: {1}" -f $g.Name, (Resolve-SteamAppId $g)
     }
     "--- Update check (app version $AppVersion):"
     try {

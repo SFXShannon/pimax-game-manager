@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo.png" width="96" alt="Pimax Game Manager logo"></p>
+
 # Pimax Game Manager
 
 [![Downloads](https://img.shields.io/github/downloads/SFXShannon/pimax-game-manager/total?label=downloads)](https://github.com/SFXShannon/pimax-game-manager/releases) [![Latest release](https://img.shields.io/github/v/release/SFXShannon/pimax-game-manager?label=latest)](https://github.com/SFXShannon/pimax-game-manager/releases/latest) [![License: MIT](https://img.shields.io/github/license/SFXShannon/pimax-game-manager)](LICENSE)
@@ -6,17 +8,25 @@ A Windows tool for managing your **Pimax Play** library: set custom cover images
 
 *Formerly Pimax Cover Changer.*
 
-![Pimax Game Manager](screenshots/main-window-v1.4.0.png)
+![Pimax Game Manager](screenshots/main-window-v1.6.0.png)
 
 ## Download
 
-Get **`PimaxGameManagerSetup.exe`** from the [latest release](https://github.com/SFXShannon/pimax-game-manager/releases/latest) and run it. It installs to your user folder (no admin needed to install), adds a Start menu shortcut, and offers a desktop shortcut. To update, run the newer setup over the top. Uninstall from Windows **Settings > Apps**; your backups and settings are kept.
+Get **`PimaxGameManagerSetup.exe`** from the [latest release](https://github.com/SFXShannon/pimax-game-manager/releases/latest) and run it. It installs to your user folder (no admin needed to install), adds a Start menu shortcut, and asks whether you want a desktop shortcut (ticked by default). To update, run the newer setup over the top. Uninstall from Windows **Settings > Apps**; your backups and settings are kept.
 
 Prefer no install? Download **`PimaxGameManager.exe`** from the same page and run it from anywhere.
 
 The app asks for admin rights when it starts, because it restarts the Pimax service so your changes take effect.
 
 Windows SmartScreen or Defender may warn about it as an unrecognized app. If you'd rather not run the exe, run the script instead (see below). It's the same code.
+
+## First-launch tour
+
+The first time you open the app, a short tour walks through images, library order, game settings and backups. Use **Next** / **Back** (or the arrow keys) to step through it.
+
+![Tour](screenshots/tutorial-v1.6.0.png)
+
+Tick **Don't show this at startup** to stop it opening each time. You can open it again whenever you like with **Tutorial** at the bottom of the main window.
 
 ## Library images
 
@@ -29,7 +39,7 @@ Custom images work for games added to Pimax Play with **Import**. For SteamVR an
 Wide banner images (about 460x215 or 920x430) fit Pimax tiles best.
 
 - **Restore original** puts a game back to its original image.
-- **Restart Pimax Play** restarts Pimax without changing anything.
+- **Restart Pimax Play** (top right) restarts Pimax without changing anything.
 
 ### Find image
 
@@ -38,7 +48,7 @@ Wide banner images (about 460x215 or 920x430) fit Pimax tiles best.
 ![Find image](screenshots/find-image.png)
 
 - **Steam:** If the game is a Steam game, or an imported game whose .exe sits in a Steam library folder, the tool reads Steam's install records to get the exact game and shows its official banners. Otherwise it searches the Steam store by name. No account needed.
-- **SteamGridDB (optional):** Adds many more choices, including community art and art for non-Steam games. Get a free API key by signing in at [steamgriddb.com](https://www.steamgriddb.com/), then **Preferences > API**. Paste it in with the **SteamGridDB key...** button. The key is stored locally in `%APPDATA%\PimaxGameManager\settings.json`.
+- **SteamGridDB (optional):** Adds many more choices, including community art and art for non-Steam games. Get a free API key by signing in at [steamgriddb.com](https://www.steamgriddb.com/), then **Preferences > API**. Paste it in with the **SteamGridDB key** button at the top right. The key is stored locally in `%APPDATA%\PimaxGameManager\settings.json`.
 
 If the automatic match is wrong, type a different name in the search box and click **Search by name**.
 
@@ -46,7 +56,7 @@ If the automatic match is wrong, type a different name in the search box and cli
 
 Pimax Play normally lists Steam games by Steam app ID, then Oculus games, then imported games in the order you added them. The only order it lets you set is for **pinned** games, which always come first. **Library order...** uses that to let you arrange the whole library:
 
-![Library order](screenshots/library-order-v1.4.2.png)
+![Library order](screenshots/library-order-v1.6.0.png)
 
 - Tick games to pin them, and drag them into the order you want. While dragging, a label shows which game you're moving and a blue line shows where it will land; hold near the top or bottom edge of the list to scroll. **Move up / Move down** and **Move to top / Move to bottom** move the selected game without dragging.
 - **Pin all** then drag to control the entire list. **Sort A-Z** sorts alphabetically.
@@ -58,7 +68,7 @@ The order is saved in Pimax Play's own pinned list (`pinToTopGameArray` in `%APP
 
 Pimax Play lets you give each game its own graphics settings, one game at a time. **Game settings...** shows them all in one place and lets you work across games:
 
-![Game settings](screenshots/game-settings-v1.3.1.png)
+![Game settings](screenshots/game-settings-v1.6.0.png)
 
 - **Edit any game**, or the **Global** settings every game uses by default. Tick **Custom** on a setting to give a game its own value; unticked settings follow Global, which is shown next to each one.
 - **Apply to...** on any setting copies just that setting to the games you pick. For example, turn on Smart Smoothing for all your sims in one go.
@@ -82,7 +92,7 @@ What's backed up:
 - **Game settings**: global and per-game
 - **Headset settings**: eye-tracking calibration, the headset profile (IPD, custom FOV crop, Quad View fine-tuning, audio switching) and the play area / boundary
 
-![Backup & restore](screenshots/backup-restore-v1.5.0.png)
+![Backup & restore](screenshots/backup-restore-v1.6.0.png)
 
 - **Automatic backups:** every time you apply an image, save the library order or save game settings, and each time you open the app, a backup is saved (only when something changed). The newest 20 automatic backups are kept; ones you make with **Back up now** are kept until you delete them.
 - **Reset detection:** when the app opens it compares Pimax with your latest backup. If images, the order, settings files or headset files (such as the eye-tracking calibration) have gone missing, an orange bar offers to **Restore** them.
@@ -130,13 +140,19 @@ powershell -ExecutionPolicy Bypass -File .\PimaxGameManager.ps1
 
 ```powershell
 Install-Module ps2exe -Scope CurrentUser
-Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.5.2
+Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.6.0
 ```
 
 To build the installer too, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
-& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.5.2 .\PimaxGameManager.iss
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.6.0 .\PimaxGameManager.iss
+```
+
+The app icon and `assets/logo.png` are generated from the logo shapes used in the app:
+
+```powershell
+powershell -STA -ExecutionPolicy Bypass -File .\tools\Make-Icon.ps1
 ```
 
 ## License
