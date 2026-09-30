@@ -1176,6 +1176,19 @@ function Show-Finder($game) {
     $fw.FindName('SearchBtn').Add_Click({ & $run $false })
     $termBox.Add_KeyDown({ if ($_.Key -eq 'Return') { & $run $false } })
     $fw.Add_ContentRendered({ & $run $true })
+    if ($Test) {
+        # Screenshot mode: show off-screen, run the search and wait for the thumbnails to download
+        $fw.WindowStartupLocation = 'Manual'; $fw.Left = -20000; $fw.Top = -20000; $fw.ShowActivated = $false; $fw.ShowInTaskbar = $false
+        $fw.Show()
+        $fw.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::ContextIdle)
+        if ($script:FinderTerm) { $termBox.Text = $script:FinderTerm; & $run $false }
+        for ($i = 0; $i -lt 60; $i++) {
+            $fw.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::Background); Start-Sleep -Milliseconds 250
+            $busy = @($results.Children | Where-Object { $_.Content.Children[0].Source.IsDownloading })
+            if ($i -gt 4 -and $busy.Count -eq 0) { break }
+        }
+        return $fw
+    }
     [void]$fw.ShowDialog()
 }
 
@@ -2129,6 +2142,7 @@ if ($Test) {
         $sid = if ($pick) { Get-GameId $pick.Tag } else { 'global' }
         $sw = Show-GameSettings $sid; Save-Shot $sw 'settings'; $sw.Close()
         $bw = Show-Backups $null $null; Save-Shot $bw 'backups'; $bw.Close()
+        if ($pick) { $script:FinderTerm = 'Crysis'; $fw = Show-Finder $pick.Tag; Save-Shot $fw 'finder'; $fw.Close() }
         $window.Close()
         return
     }

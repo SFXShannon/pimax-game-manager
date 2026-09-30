@@ -45,7 +45,7 @@ Wide banner images (about 460x215 or 920x430) fit Pimax tiles best.
 
 **Find image** shows a gallery of matching art. Click one to use it.
 
-![Find image](screenshots/find-image.png)
+![Find image](screenshots/find-image-v1.6.0.png)
 
 - **Steam:** If the game is a Steam game, or an imported game whose .exe sits in a Steam library folder, the tool reads Steam's install records to get the exact game and shows its official banners. Otherwise it searches the Steam store by name. No account needed.
 - **SteamGridDB (optional):** Adds many more choices, including community art and art for non-Steam games. Get a free API key by signing in at [steamgriddb.com](https://www.steamgriddb.com/), then **Preferences > API**. Paste it in with the **SteamGridDB key** button at the top right. The key is stored locally in `%APPDATA%\PimaxGameManager\settings.json`.
