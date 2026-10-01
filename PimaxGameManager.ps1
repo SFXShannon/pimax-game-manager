@@ -36,11 +36,12 @@ try {
     if ((Test-Path $legacyCfg) -and -not (Test-Path $newCfg)) { Copy-Item $legacyCfg $newCfg }
 } catch { }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
-$AppVersion = '1.7.1'
+$AppVersion = '1.7.2'
 $RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-game-manager/releases/latest'
 
 # ---------- Library ----------
-function Get-PimaxGames {
+# -WithPending shows the library as it will be once the waiting changes are applied (see "Waiting changes" below)
+function Get-PimaxGames([switch]$WithPending) {
     $games = @()
     foreach ($f in Get-ChildItem $ManifestDir -Filter *.json -ErrorAction SilentlyContinue) {
         try {
@@ -48,8 +49,24 @@ function Get-PimaxGames {
             $j = $raw | ConvertFrom-Json
             $name = if ($j.name) { $j.name } elseif ($j.productName) { $j.productName } else { $f.BaseName }
             $src = switch ($j.source) { 'pimax_import' { 'Imported' } 'steam' { 'SteamVR' } 'oculus' { 'Oculus' } default { if ($j.source) { $j.source } else { 'Other' } } }
-            $games += [pscustomobject]@{ Name = $name; Source = $src; Icon = $j.icon; File = $f.FullName }
+            $games += [pscustomobject]@{ Name = $name; Source = $src; Icon = $j.icon; File = $f.FullName; Route = $null; Pending = $null }
         } catch { }
+    }
+    if ($WithPending -and $script:Pending -and $script:Pending.Count) {
+        $byFile = @{}; foreach ($g in $games) { $byFile[$g.File] = $g }
+        foreach ($op in $script:Pending) {
+            $g = $byFile[$op.File]
+            switch ($op.Kind) {
+                'add' {
+                    $n = [pscustomobject]@{ Name = $op.Manifest.name; Source = 'Imported'; Icon = $op.Manifest.icon; File = $op.File; Route = $op.Manifest.route; Pending = 'new' }
+                    $games += $n; $byFile[$op.File] = $n
+                }
+                'edit'         { if ($g) { $g.Name = $op.Name; $g.Route = $op.Route; $g.Pending = 'changed' } }
+                'image'        { if ($g) { $g.Icon = $op.Icon; $g.Pending = 'changed' } }
+                'restoreImage' { if ($g) { $g.Icon = $op.OrigIcon; $g.Pending = 'changed' } }
+                'remove'       { if ($g) { $games = @($games | Where-Object { $_.File -ne $op.File }) } }
+            }
+        }
     }
     $games | Sort-Object @{ Expression = { if ($_.Source -eq 'Imported') { 0 } else { 1 } } }, Name
 }
@@ -98,39 +115,26 @@ function Restart-Pimax {
 
 function Save-Cover($game, [string]$source) {
     if ($game.Source -ne 'Imported') { throw "Pimax replaces images for $($game.Source) games every time it starts, so only imported games can have a custom image." }
+    # The image is saved into the app's covers folder now; the game's entry is changed when the waiting changes are applied
     $id = [IO.Path]::GetFileNameWithoutExtension($game.File)
-    $ext = [IO.Path]::GetExtension(($source -split '\?')[0]).ToLower()
-    if ($ext -notin '.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif') { $ext = '.jpg' }
-    $dest = Join-Path $CoverDir ("{0}_{1}{2}" -f $id, (Get-Date -Format 'yyyyMMddHHmmss'), $ext)
-
-    if ($source -match '^https?://') { (New-Object Net.WebClient).DownloadFile($source, $dest) }
-    else { Copy-Item -LiteralPath $source -Destination $dest -Force }
-    try { Load-Bitmap $dest | Out-Null } catch { Remove-Item $dest -Force; throw "That file isn't a readable image." }
-
-    $backup = Join-Path $BackupDir ([IO.Path]::GetFileName($game.File) + '.orig')
-    if (-not (Test-Path $backup)) { Copy-Item $game.File $backup }
-
-    Get-Process PimaxClient -ErrorAction SilentlyContinue | Stop-Process -Force
-    Start-Sleep -Seconds 2
-    $j = [IO.File]::ReadAllText($game.File).TrimStart([char]0xFEFF) | ConvertFrom-Json
-    if ($j.PSObject.Properties.Name -contains 'icon') { $j.icon = $dest } else { $j | Add-Member -NotePropertyName icon -NotePropertyValue $dest }
-    [IO.File]::WriteAllText($game.File, ($j | ConvertTo-Json -Compress -Depth 10), $Utf8NoBom)
+    $dest = Save-CoverFile $id $source
+    Add-PendingChange ([pscustomobject]@{ Kind = 'image'; File = $game.File; Name = $game.Name; Icon = $dest })
     return $dest
 }
 
+function Get-OrigBackupPath($game) {
+    foreach ($d in $BackupDir, $LegacyBackupDir) { $p = Join-Path $d ([IO.Path]::GetFileName($game.File) + '.orig'); if (Test-Path -LiteralPath $p) { return $p } }
+    return $null
+}
+
+# Queues putting back the original image (only the image, so a rename or a new .exe made with Edit game is kept)
 function Restore-Cover($game) {
-    $backup = Join-Path $BackupDir ([IO.Path]::GetFileName($game.File) + '.orig')
-    if (-not (Test-Path $backup)) { $backup = Join-Path $LegacyBackupDir ([IO.Path]::GetFileName($game.File) + '.orig') }
-    if (-not (Test-Path $backup)) { throw 'No backup for this game - it still has its original image.' }
-    Get-Process PimaxClient -ErrorAction SilentlyContinue | Stop-Process -Force
-    Start-Sleep -Seconds 2
-    # Put back only the image, so a rename or a new .exe made with Edit game is kept
-    $orig = [IO.File]::ReadAllText($backup).TrimStart([char]0xFEFF) | ConvertFrom-Json
-    $j = [IO.File]::ReadAllText($game.File).TrimStart([char]0xFEFF) | ConvertFrom-Json
-    $icon = if ($orig.PSObject.Properties.Name -contains 'icon') { $orig.icon } else { '' }
-    if ($j.PSObject.Properties.Name -contains 'icon') { $j.icon = $icon } else { $j | Add-Member -NotePropertyName icon -NotePropertyValue $icon }
-    [IO.File]::WriteAllText($game.File, ($j | ConvertTo-Json -Compress -Depth 10), $Utf8NoBom)
-    Remove-Item $backup -Force
+    $queued = @($script:Pending | Where-Object { $_.File -eq $game.File -and $_.Kind -in 'image', 'add' })
+    $backup = Get-OrigBackupPath $game
+    if (-not $backup -and -not $queued.Count) { throw 'No backup for this game - it still has its original image.' }
+    $icon = ''
+    if ($backup) { try { $o = [IO.File]::ReadAllText($backup).TrimStart([char]0xFEFF) | ConvertFrom-Json; if ($o.icon) { $icon = [string]$o.icon } } catch { } }
+    Add-PendingChange ([pscustomobject]@{ Kind = 'restoreImage'; File = $game.File; Name = $game.Name; OrigIcon = $icon })
 }
 
 # ---------- Image finder (Steam + SteamGridDB) ----------
@@ -242,12 +246,13 @@ function Get-RouteKey([string]$route) {
 # Map of route -> game for everything already in the library (so the same game isn't added twice)
 function Get-LibraryRoutes {
     $map = @{}
-    foreach ($g in Get-PimaxGames) { $r = Get-Route $g; if ($r) { $map[(Get-RouteKey $r)] = $g } }
+    foreach ($g in Get-PimaxGames -WithPending) { $r = Get-Route $g; if ($r) { $map[(Get-RouteKey $r)] = $g } }
     return $map
 }
 
 function New-ImportId {
     $taken = @{}; foreach ($f in Get-ChildItem $ManifestDir -Filter *.json -ErrorAction SilentlyContinue) { $taken[$f.BaseName] = $true }
+    foreach ($o in @($script:Pending)) { $taken[[IO.Path]::GetFileNameWithoutExtension($o.File)] = $true }
     do { $id = 'local.' + (-join (1..8 | ForEach-Object { '0123456789abcdef'[(Get-Random -Maximum 16)] })) } while ($taken.ContainsKey($id))
     return $id
 }
@@ -327,36 +332,29 @@ function Write-Manifest([string]$path, $obj) {
     [IO.File]::WriteAllText($path, $text, $Utf8NoBom)
 }
 
-# Adds games to the Pimax library. Each entry: Name, Route, and optionally Image (a link or file).
-# Images are fetched first; the manifests are written while Pimax is stopped. Returns a report.
+# Adds games to the library. Each entry: Name, Route, and optionally Image (a link or file).
+# Images are fetched now; the games are queued as waiting changes and written when they're applied. Returns a report.
 function Add-ImportedGames($entries) {
     $have = Get-LibraryRoutes
-    $report = [ordered]@{ Added = @(); Skipped = @(); ImageFailed = @(); ServiceOk = $true }
-    $todo = @()
+    $report = [ordered]@{ Added = @(); Skipped = @(); ImageFailed = @() }
     foreach ($e in $entries) {
         $name = ([string]$e.Name).Trim(); $route = ([string]$e.Route).Trim('"', ' ')
         if (-not $name -or -not $route) { $report.Skipped += "$name (missing name or path)"; continue }
         if (-not (Test-Path -LiteralPath $route)) { $report.Skipped += "$name (file not found)"; continue }
         $k = Get-RouteKey $route
         if ($have.ContainsKey($k)) { $report.Skipped += "$name (already in your library as $($have[$k].Name))"; continue }
-        $have[$k] = $true
+        $have[$k] = [pscustomobject]@{ Name = $name }
         $id = New-ImportId
-        while ($todo | Where-Object { $_.id -eq $id }) { $id = New-ImportId }
         $icon = ''
         if ($e.Image) { try { $icon = Save-CoverFile $id ([string]$e.Image) } catch { $report.ImageFailed += $name } }
-        $todo += [pscustomobject][ordered]@{ create_time = 0; icon = $icon; id = $id; name = $name; play_time = 0; route = $route; source = 'pimax_import'; version = '' }
-    }
-    if ($todo.Count) {
-        $report.ServiceOk = Invoke-WhilePimaxStopped {
-            if (-not (Test-Path $ManifestDir)) { New-Item -ItemType Directory -Path $ManifestDir -Force | Out-Null }
-            foreach ($m in $todo) { Write-Manifest (Join-Path $ManifestDir "$($m.id).json") $m }
-        }
-        $report.Added = @($todo | ForEach-Object { [pscustomobject]@{ Id = $_.id; Name = $_.name; HasImage = [bool]$_.icon } })
+        $m = [pscustomobject][ordered]@{ create_time = 0; icon = $icon; id = $id; name = $name; play_time = 0; route = $route; source = 'pimax_import'; version = '' }
+        Add-PendingChange ([pscustomobject]@{ Kind = 'add'; File = (Join-Path $ManifestDir "$id.json"); Name = $name; Manifest = $m })
+        $report.Added += [pscustomobject]@{ Id = $id; Name = $name; HasImage = [bool]$icon }
     }
     return [pscustomobject]$report
 }
 
-# Renames an imported game or points it at a different .exe / shortcut
+# Renames an imported game or points it at a different .exe / shortcut (queued)
 function Set-ImportedGame($game, [string]$name, [string]$route) {
     if ($game.Source -ne 'Imported') { throw 'Only imported games can be edited here; Pimax rebuilds Steam and Oculus entries itself.' }
     $name = $name.Trim(); $route = $route.Trim('"', ' ')
@@ -365,39 +363,115 @@ function Set-ImportedGame($game, [string]$name, [string]$route) {
     $k = Get-RouteKey $route
     $other = (Get-LibraryRoutes)[$k]
     if ($other -and $other.File -ne $game.File) { throw "That file is already in your library as $($other.Name)." }
-    $dir = Join-Path $BackupDir 'edited-games'
-    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    Copy-Item -LiteralPath $game.File (Join-Path $dir ("{0}_{1}" -f (Get-Date -Format 'yyyyMMddHHmmss'), [IO.Path]::GetFileName($game.File)))
-    Invoke-WhilePimaxStopped {
-        $j = [IO.File]::ReadAllText($game.File).TrimStart([char]0xFEFF) | ConvertFrom-Json
-        $j.name = $name
-        if ($j.PSObject.Properties.Name -contains 'route') { $j.route = $route } else { $j | Add-Member -NotePropertyName route -NotePropertyValue $route }
-        Write-Manifest $game.File $j
+    Add-PendingChange ([pscustomobject]@{ Kind = 'edit'; File = $game.File; Name = $name; Route = $route; OldName = $game.Name })
+}
+
+# Removes imported games from the library (queued). When applied, the entry files are moved to the app's backups
+# folder (not deleted) and taken off the pinned list. Per-game settings are left for "Remove leftover settings".
+function Remove-ImportedGames($games) {
+    $games = @($games | Where-Object { $_.Source -eq 'Imported' })
+    foreach ($g in $games) { Add-PendingChange ([pscustomobject]@{ Kind = 'remove'; File = $g.File; Name = $g.Name; Id = (Get-GameId $g) }) }
+    return [pscustomobject]@{ Removed = $games.Count }
+}
+
+# ---------- Waiting changes ----------
+# Changes to the library (added, edited and removed games, images) are queued here instead of restarting Pimax Play
+# for each one. They're written in one go, while Pimax is stopped, by Invoke-WhilePimaxStopped - so they're also
+# applied by any other save that restarts Pimax (library order, game settings, restoring a backup, Restart Pimax Play).
+$script:Pending = New-Object Collections.ArrayList
+$script:ApplyErrors = @()
+
+function Add-PendingChange($op) {
+    $add = $script:Pending | Where-Object { $_.File -eq $op.File -and $_.Kind -eq 'add' } | Select-Object -First 1
+    if ($add) {
+        # A game that is itself still waiting to be added: change what will be added instead
+        switch ($op.Kind) {
+            'edit'         { $add.Manifest.name = $op.Name; $add.Manifest.route = $op.Route; $add.Name = $op.Name }
+            'image'        { $add.Manifest.icon = $op.Icon }
+            'restoreImage' { $add.Manifest.icon = '' }
+            'remove'       { [void]$script:Pending.Remove($add) }
+        }
+        return
+    }
+    $replaces = switch ($op.Kind) { 'remove' { 'edit', 'image', 'restoreImage' } 'image' { 'image', 'restoreImage' } 'restoreImage' { 'image', 'restoreImage' } 'edit' { 'edit' } default { @() } }
+    $hadImage = $false
+    foreach ($o in @($script:Pending | Where-Object { $_.File -eq $op.File })) {
+        if ($replaces -contains $o.Kind) { if ($o.Kind -eq 'image') { $hadImage = $true }; [void]$script:Pending.Remove($o) }
+    }
+    # Undoing a waiting image on a game that never had a custom one: nothing left to do
+    if ($op.Kind -eq 'restoreImage' -and $hadImage -and -not (Get-OrigBackupPath $op)) { return }
+    if ($op.Kind -eq 'edit' -and $op.OldName) {
+        $cur = [IO.File]::ReadAllText($op.File).TrimStart([char]0xFEFF) | ConvertFrom-Json
+        if ($cur.name -eq $op.Name -and (Get-RouteKey ([string]$cur.route)) -eq (Get-RouteKey $op.Route)) { return }   # edited back to how it is
+    }
+    [void]$script:Pending.Add($op)
+}
+
+function Get-PendingLabel($op) {
+    switch ($op.Kind) {
+        'add'          { "Add $($op.Name)" }
+        'edit'         { if ($op.OldName -and $op.OldName -ne $op.Name) { "Rename $($op.OldName) to $($op.Name)" } else { "Change the program for $($op.Name)" } }
+        'image'        { "New image for $($op.Name)" }
+        'restoreImage' { "Original image for $($op.Name)" }
+        'remove'       { "Remove $($op.Name)" }
     }
 }
 
-# Removes imported games from the library. Their entry files are moved to the app's backups folder (not deleted),
-# and they are taken off the pinned list. Per-game settings are left for "Remove leftover settings".
-function Remove-ImportedGames($games) {
-    $games = @($games | Where-Object { $_.Source -eq 'Imported' })
-    if (-not $games.Count) { return [pscustomobject]@{ Removed = 0; ServiceOk = $true } }
-    $dest = Join-Path $BackupDir 'removed-games'
-    $ids = @($games | ForEach-Object { Get-GameId $_ })
-    $ok = Invoke-WhilePimaxStopped {
-        if (-not (Test-Path $dest)) { New-Item -ItemType Directory -Path $dest -Force | Out-Null }
-        foreach ($g in $games) {
-            $to = Join-Path $dest ("{0}_{1}" -f (Get-Date -Format 'yyyyMMddHHmmss'), [IO.Path]::GetFileName($g.File))
-            Move-Item -LiteralPath $g.File -Destination $to -Force
-        }
-        if (Test-Path $ClientConfig) {
-            $text = [IO.File]::ReadAllText($ClientConfig)
-            $pins = @(Get-PinnedIds $text)
-            $keep = @($pins | Where-Object { $ids -notcontains $_ })
-            if ($keep.Count -ne $pins.Count) { [IO.File]::WriteAllText($ClientConfig, (Set-PinnedIdsInText $text $keep), $Utf8NoBom) }
-        }
+# Writes the waiting changes. Pimax must be stopped (Invoke-WhilePimaxStopped calls this). Each change is tried on
+# its own; any that fail are listed in $script:ApplyErrors and stay waiting.
+function Write-PendingChanges {
+    $script:ApplyErrors = @()
+    $script:LastApplied = 0
+    foreach ($op in @($script:Pending)) {
+        try {
+            switch ($op.Kind) {
+                'add' {
+                    if (-not (Test-Path $ManifestDir)) { New-Item -ItemType Directory -Path $ManifestDir -Force | Out-Null }
+                    Write-Manifest $op.File $op.Manifest
+                }
+                'edit' {
+                    $dir = Join-Path $BackupDir 'edited-games'
+                    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+                    Copy-Item -LiteralPath $op.File (Join-Path $dir ("{0}_{1}" -f (Get-Date -Format 'yyyyMMddHHmmss'), [IO.Path]::GetFileName($op.File)))
+                    $j = [IO.File]::ReadAllText($op.File).TrimStart([char]0xFEFF) | ConvertFrom-Json
+                    $j.name = $op.Name
+                    if ($j.PSObject.Properties.Name -contains 'route') { $j.route = $op.Route } else { $j | Add-Member -NotePropertyName route -NotePropertyValue $op.Route }
+                    Write-Manifest $op.File $j
+                }
+                'image' {
+                    $backup = Join-Path $BackupDir ([IO.Path]::GetFileName($op.File) + '.orig')
+                    if (-not (Get-OrigBackupPath $op)) { Copy-Item -LiteralPath $op.File $backup }
+                    $j = [IO.File]::ReadAllText($op.File).TrimStart([char]0xFEFF) | ConvertFrom-Json
+                    if ($j.PSObject.Properties.Name -contains 'icon') { $j.icon = $op.Icon } else { $j | Add-Member -NotePropertyName icon -NotePropertyValue $op.Icon }
+                    Write-Manifest $op.File $j
+                }
+                'restoreImage' {
+                    $backup = Get-OrigBackupPath $op
+                    $j = [IO.File]::ReadAllText($op.File).TrimStart([char]0xFEFF) | ConvertFrom-Json
+                    if ($j.PSObject.Properties.Name -contains 'icon') { $j.icon = $op.OrigIcon } else { $j | Add-Member -NotePropertyName icon -NotePropertyValue $op.OrigIcon }
+                    Write-Manifest $op.File $j
+                    if ($backup) { Remove-Item -LiteralPath $backup -Force }
+                }
+                'remove' {
+                    $dest = Join-Path $BackupDir 'removed-games'
+                    if (-not (Test-Path $dest)) { New-Item -ItemType Directory -Path $dest -Force | Out-Null }
+                    Move-Item -LiteralPath $op.File -Destination (Join-Path $dest ("{0}_{1}" -f (Get-Date -Format 'yyyyMMddHHmmss'), [IO.Path]::GetFileName($op.File))) -Force
+                    if (Test-Path $ClientConfig) {
+                        $text = [IO.File]::ReadAllText($ClientConfig)
+                        $pins = @(Get-PinnedIds $text)
+                        $keep = @($pins | Where-Object { $_ -ne $op.Id })
+                        if ($keep.Count -ne $pins.Count) { [IO.File]::WriteAllText($ClientConfig, (Set-PinnedIdsInText $text $keep), $Utf8NoBom) }
+                    }
+                }
+            }
+            [void]$script:Pending.Remove($op)
+            $script:LastApplied++
+        } catch { $script:ApplyErrors += "$(Get-PendingLabel $op): $($_.Exception.Message)" }
     }
-    return [pscustomobject]@{ Removed = $games.Count; ServiceOk = $ok }
 }
+
+# IDs of games waiting to be removed (so the library order doesn't pin them again)
+function Get-PendingRemovedIds { @($script:Pending | Where-Object { $_.Kind -eq 'remove' } | ForEach-Object { $_.Id }) }
 
 # ---------- Library order (Pimax "pin to top" list) ----------
 $ClientConfig = Join-Path $env:APPDATA 'PimaxClient\config.json'
@@ -418,7 +492,8 @@ function Get-GameId($game) {
 function Get-PimaxOrderKey($game, [string]$id) {
     if ($id -match '^steam\.app\.(\d+)$') { return '1-{0:D12}' -f [long]$Matches[1] }
     if ($game.Source -ne 'Imported') { return '2-' + $game.Name }
-    return '3-' + (Get-Item $game.File).CreationTime.ToString('yyyyMMddHHmmss')
+    if (-not (Test-Path -LiteralPath $game.File)) { return '4-' + $game.Name }   # waiting to be added: goes in last
+    return '3-' + (Get-Item -LiteralPath $game.File).CreationTime.ToString('yyyyMMddHHmmss')
 }
 
 function Save-PinnedOrder([string[]]$ids) {
@@ -539,7 +614,7 @@ function Invoke-WhilePimaxStopped([scriptblock]$action, [switch]$Full) {
     if ($Full) { Get-Process pi_server, pi_overlay, pi_vst, PimaxHome-Win64-Shipping -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }
     Start-Sleep -Seconds 2
     $err = $null
-    try { & $action } catch { $err = $_ }
+    try { Write-PendingChanges; & $action } catch { $err = $_ }
     try { Start-Service $ServiceName -ErrorAction Stop } catch { $svcOk = $false }
     Start-Sleep -Seconds 3
     if (Test-Path $client) { Start-Process $client }
@@ -573,6 +648,7 @@ function Get-HeadsetTarget([string]$area, [string]$name) {
 
 # ---------- Backups (snapshots of images, library order and game settings) ----------
 function Get-Route($game) {
+    if ($game.Route) { return [string]$game.Route }
     try { return [string](([IO.File]::ReadAllText($game.File).TrimStart([char]0xFEFF) | ConvertFrom-Json).route) } catch { return '' }
 }
 
@@ -1095,7 +1171,7 @@ $ThemeXaml = @'
           <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoKey}" x:Name="KeyBtn" Content="SteamGridDB key"
                   ToolTip="Add a free SteamGridDB API key for many more images"/>
           <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoPower}" x:Name="RestartBtn" Content="Restart Pimax Play" Margin="8,0,0,0"
-                  ToolTip="Restart Pimax Play without changing anything"/>
+                  ToolTip="Restart Pimax Play (applies any waiting changes)"/>
         </StackPanel>
         <Image Source="{StaticResource LogoImage}" Height="34" Margin="0,0,14,0" VerticalAlignment="Center"/>
         <StackPanel VerticalAlignment="Center">
@@ -1123,6 +1199,16 @@ $ThemeXaml = @'
           <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoUndo}" x:Name="ResetRestore" DockPanel.Dock="Right" Content="Restore..."
                   Padding="12,5" Background="#EA580C" BorderBrush="#FB923C" FontWeight="SemiBold"/>
           <TextBlock x:Name="ResetText" VerticalAlignment="Center" TextWrapping="Wrap"/>
+        </DockPanel>
+      </Border>
+      <Border x:Name="PendingBar" Visibility="Collapsed" Background="#2A2410" BorderBrush="#8A6D1F"
+              BorderThickness="1" CornerRadius="9" Padding="14,9" Margin="0,0,0,12">
+        <DockPanel>
+          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoUndo}" x:Name="PendingDiscard" DockPanel.Dock="Right" Content="Discard" Margin="8,0,0,0" Padding="12,5"
+                  ToolTip="Throw away the waiting changes"/>
+          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoCheck}" x:Name="PendingApply" DockPanel.Dock="Right" Content="Apply &amp; restart Pimax Play"
+                  Padding="12,5" Background="#16A34A" BorderBrush="#22C55E" FontWeight="SemiBold" ToolTip="Write all waiting changes and restart Pimax Play once"/>
+          <TextBlock x:Name="PendingText" VerticalAlignment="Center" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" MaxHeight="40"/>
         </DockPanel>
       </Border>
     </StackPanel>
@@ -1165,7 +1251,7 @@ $ThemeXaml = @'
             <TextBox x:Name="SourceBox"/>
           </DockPanel>
           <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
-            <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoCheck}" x:Name="ApplyBtn" Content="Apply image"
+            <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoCheck}" x:Name="ApplyBtn" Content="Use image"
                     Background="#16A34A" BorderBrush="#22C55E" FontWeight="SemiBold"/>
             <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoUndo}" x:Name="RestoreBtn" Content="Restore original" Margin="8,0,0,0"/>
           </StackPanel>
@@ -1197,7 +1283,7 @@ $ThemeXaml = @'
 '@).Replace('__THEME__', $ThemeXaml)
 $window = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $xaml))
 $ui = @{}
-foreach ($n in 'GameList','AddBtn','EditBtn','RefreshBtn','OrderBtn','SettingsBtn','GameTitle','GameInfo','SourceBox','BrowseBtn','PreviewBtn','FindBtn','KeyBtn','ApplyBtn','RestoreBtn','RestartBtn','PreviewImg','NoImage','Status','UpdateBar','UpdateText','UpdateBtn','UpdateClose','VersionLabel','ReportLink','TutorialLink','LibCount','BackupBtn','ResetBar','ResetText','ResetRestore','ResetDismiss') { $ui[$n] = $window.FindName($n) }
+foreach ($n in 'GameList','AddBtn','EditBtn','RefreshBtn','OrderBtn','SettingsBtn','GameTitle','GameInfo','SourceBox','BrowseBtn','PreviewBtn','FindBtn','KeyBtn','ApplyBtn','RestoreBtn','RestartBtn','PreviewImg','NoImage','Status','UpdateBar','UpdateText','UpdateBtn','UpdateClose','VersionLabel','ReportLink','TutorialLink','LibCount','BackupBtn','ResetBar','ResetText','ResetRestore','ResetDismiss','PendingBar','PendingText','PendingApply','PendingDiscard') { $ui[$n] = $window.FindName($n) }
 $window.Title = "Pimax Game Manager $AppVersion"
 $window.Add_SourceInitialized({ Set-DarkTitleBar $this })
 
@@ -1236,25 +1322,82 @@ function Fill-List {
     $keep = (Selected-Game).File
     if ($script:SelectAfterFill) { $keep = $script:SelectAfterFill; $script:SelectAfterFill = $null }
     $ui.GameList.Items.Clear()
-    foreach ($g in Get-PimaxGames) {
+    $newBadge = { param($text, $fg, $bg) $t = New-Object Windows.Controls.TextBlock; $t.Text = $text; $t.FontSize = 11; $t.Foreground = $fg
+                  $b = New-Object Windows.Controls.Border; $b.Child = $t; $b.Background = $bg; $b.CornerRadius = '4'; $b.Padding = '6,1,6,2'; $b.Margin = '6,0,0,0'; $b.VerticalAlignment = 'Center'
+                  [Windows.Controls.DockPanel]::SetDock($b, 'Right'); $b }
+    foreach ($g in Get-PimaxGames -WithPending) {
         $item = New-Object Windows.Controls.ListBoxItem
         $name = New-Object Windows.Controls.TextBlock
         $name.Text = $g.Name; $name.TextTrimming = 'CharacterEllipsis'; $name.VerticalAlignment = 'Center'
         $pal = switch ($g.Source) { 'Imported' { '#22D3EE', '#0F2A33' } 'SteamVR' { '#93B4FF', '#172340' } 'Oculus' { '#C4B5FD', '#231B3B' } default { '#9AA3B5', '#1F2430' } }
-        $badgeText = New-Object Windows.Controls.TextBlock
-        $badgeText.Text = $g.Source; $badgeText.FontSize = 11; $badgeText.Foreground = $pal[0]
-        $badge = New-Object Windows.Controls.Border
-        $badge.Child = $badgeText; $badge.Background = $pal[1]; $badge.CornerRadius = '4'; $badge.Padding = '6,1,6,2'; $badge.Margin = '8,0,0,0'; $badge.VerticalAlignment = 'Center'
         $row = New-Object Windows.Controls.DockPanel
-        [Windows.Controls.DockPanel]::SetDock($badge, 'Right')
-        [void]$row.Children.Add($badge); [void]$row.Children.Add($name)
+        [void]$row.Children.Add((& $newBadge $g.Source $pal[0] $pal[1]))
+        if ($g.Pending) {
+            $pb = & $newBadge $(if ($g.Pending -eq 'new') { 'New' } else { 'Changed' }) '#FBBF24' '#3A2E0E'
+            $pb.ToolTip = 'Waiting to be applied - click Apply & restart Pimax Play at the top'
+            [void]$row.Children.Add($pb)
+        }
+        [void]$row.Children.Add($name)
         $item.Content = $row
         $item.Tag = $g; $item.Padding = '10,7'
         [void]$ui.GameList.Items.Add($item)
         if ($g.File -eq $keep) { $ui.GameList.SelectedItem = $item }
     }
     $ui.LibCount.Text = "$($ui.GameList.Items.Count) games"
+    Update-PendingBar
 }
+
+function Update-PendingBar {
+    $n = $script:Pending.Count
+    if (-not $n) { $ui.PendingBar.Visibility = 'Collapsed'; return }
+    $labels = @($script:Pending | ForEach-Object { Get-PendingLabel $_ })
+    $ui.PendingText.Text = "$n change$(if ($n -ne 1) { 's' }) waiting to be applied:  " + ($labels -join ',  ')
+    $ui.PendingText.ToolTip = "Waiting to be applied (Pimax Play restarts once):`n" + (($labels | ForEach-Object { "  - $_" }) -join "`n")
+    $ui.PendingBar.Visibility = 'Visible'
+}
+
+# Writes all waiting changes and restarts Pimax Play once. Returns $true when everything was applied.
+function Invoke-ApplyPending {
+    $n = $script:Pending.Count
+    Set-Status $(if ($n) { "Applying $n change$(if ($n -ne 1) { 's' }) - restarting Pimax Play..." } else { 'Restarting Pimax Play...' })
+    $ui.PendingApply.IsEnabled = $false; $ui.RestartBtn.IsEnabled = $false
+    try { $ok = Invoke-WhilePimaxStopped { } }
+    catch { $ok = $false; $script:ApplyErrors += $_.Exception.Message }
+    finally { $ui.PendingApply.IsEnabled = $true; $ui.RestartBtn.IsEnabled = $true }
+    Fill-List
+    Save-AutoSnapshot
+    $msg = if ($n) { "Applied $script:LastApplied change$(if ($script:LastApplied -ne 1) { 's' }) and restarted Pimax Play." } else { 'Pimax Play restarted.' }
+    $bad = $false
+    if ($script:ApplyErrors.Count) { $msg += "  Couldn't apply: $($script:ApplyErrors -join '; ')"; $bad = $true }
+    if (-not $ok) { $msg += '  (Couldn''t restart the Pimax service - restart your PC if the changes don''t show.)'; $bad = $true }
+    Set-Status $msg $bad
+    return (-not $script:Pending.Count)
+}
+
+$ui.PendingApply.Add_Click({ [void](Invoke-ApplyPending) })
+$ui.PendingDiscard.Add_Click({
+    $n = $script:Pending.Count
+    $a = [Windows.MessageBox]::Show("Throw away $n waiting change$(if ($n -ne 1) { 's' })? Nothing has been written to Pimax Play yet.", 'Discard changes', 'YesNo', 'Question')
+    if ($a -ne 'Yes') { return }
+    $script:Pending.Clear()
+    Fill-List
+    Show-Preview (Selected-Game).Icon
+    Set-Status "Discarded $n change$(if ($n -ne 1) { 's' })."
+})
+
+# Closing with waiting changes: apply them, throw them away, or stay
+$window.Add_Closing({
+    if ($Test -or -not $script:Pending.Count) { return }
+    $n = $script:Pending.Count
+    $list = (@($script:Pending | Select-Object -First 12 | ForEach-Object { '  - ' + (Get-PendingLabel $_) }) -join "`n") + $(if ($n -gt 12) { "`n  ...and $($n - 12) more" })
+    $a = [Windows.MessageBox]::Show("You have $n change$(if ($n -ne 1) { 's' }) that haven't been applied to Pimax Play yet:`n`n$list`n`nApply them now? Pimax Play will restart.`n`nYes: apply and close.   No: throw them away and close.   Cancel: keep working.", 'Apply changes?', 'YesNoCancel', 'Question')
+    if ($a -eq 'Cancel') { $_.Cancel = $true; return }
+    if ($a -eq 'No') { $script:Pending.Clear(); return }
+    if (-not (Invoke-ApplyPending)) {
+        $_.Cancel = $true
+        [Windows.MessageBox]::Show("Some changes couldn't be applied, so the app is staying open. Details are at the bottom of the window.", 'Apply changes', 'OK', 'Warning') | Out-Null
+    }
+})
 
 $ui.GameList.Add_SelectionChanged({
     $g = Selected-Game
@@ -1276,7 +1419,7 @@ $ui.BrowseBtn.Add_Click({
     $dlg.Filter = 'Images|*.jpg;*.jpeg;*.png;*.webp;*.bmp;*.gif|All files|*.*'
     if ($dlg.ShowDialog() -eq 'OK') {
         $ui.SourceBox.Text = $dlg.FileName
-        try { Show-Preview $dlg.FileName; Set-Status 'Preview of the new image. Click "Apply image" to use it.' } catch { Set-Status "Couldn't read that image." $true }
+        try { Show-Preview $dlg.FileName; Set-Status 'Preview of the new image. Click "Use image" to use it.' } catch { Set-Status "Couldn't read that image." $true }
     }
 })
 
@@ -1284,16 +1427,10 @@ $ui.PreviewBtn.Add_Click({
     $src = $ui.SourceBox.Text.Trim('"', ' ')
     if (-not $src) { Set-Status 'Paste a link or choose a file first.' $true; return }
     Set-Status 'Loading preview...'
-    try { Show-Preview $src; Set-Status 'Preview of the new image. Click "Apply image" to use it.' } catch { Set-Status "Couldn't load that image: $($_.Exception.Message)" $true }
+    try { Show-Preview $src; Set-Status 'Preview of the new image. Click "Use image" to use it.' } catch { Set-Status "Couldn't load that image: $($_.Exception.Message)" $true }
 })
 
-function Finish-Restart([string]$doneMsg) {
-    Set-Status 'Restarting Pimax Play...'
-    if (Restart-Pimax) { Set-Status $doneMsg }
-    else { Set-Status "$doneMsg  (Couldn't restart the Pimax service - restart your PC if the image doesn't update.)" $true }
-    Fill-List
-    Save-AutoSnapshot
-}
+$WaitingHint = 'Keep going, then click Apply & restart Pimax Play at the top when you''re done.'
 
 $ui.ApplyBtn.Add_Click({
     $g = Selected-Game
@@ -1304,9 +1441,11 @@ $ui.ApplyBtn.Add_Click({
     try {
         Set-Status 'Saving image...'
         $dest = Save-Cover $g $src
+        Fill-List
         Show-Preview $dest
-        Finish-Restart "Done - $($g.Name) now uses the new image."
-    } catch { Set-Status "Couldn't apply the image: $($_.Exception.Message)" $true }
+        $ui.SourceBox.Text = ''
+        Set-Status "New image for $($g.Name) is waiting to be applied. $WaitingHint"
+    } catch { Set-Status "Couldn't use the image: $($_.Exception.Message)" $true }
 })
 
 $ui.RestoreBtn.Add_Click({
@@ -1314,8 +1453,12 @@ $ui.RestoreBtn.Add_Click({
     if (-not $g) { Set-Status 'Pick a game on the left first.' $true; return }
     $r = [Windows.MessageBox]::Show("Put $($g.Name) back to its original image?", 'Restore original', 'YesNo', 'Question')
     if ($r -ne 'Yes') { return }
-    try { Restore-Cover $g; Finish-Restart "Restored the original image for $($g.Name)." }
-    catch { Set-Status $_.Exception.Message $true }
+    try {
+        Restore-Cover $g
+        Fill-List
+        Show-Preview (Selected-Game).Icon
+        Set-Status $(if ($script:Pending.Count) { "Original image for $($g.Name) is waiting to be applied. $WaitingHint" } else { "$($g.Name) is back to its original image." })
+    } catch { Set-Status $_.Exception.Message $true }
 })
 
 function Show-Finder($game) {
@@ -1394,7 +1537,7 @@ $ui.FindBtn.Add_Click({
     if ($script:finderPick) {
         $ui.SourceBox.Text = $script:finderPick
         Set-Status 'Loading preview...'
-        try { Show-Preview $script:finderPick; Set-Status 'Preview of the new image. Click "Apply image" to use it.' }
+        try { Show-Preview $script:finderPick; Set-Status 'Preview of the new image. Click "Use image" to use it.' }
         catch { Set-Status "Couldn't load that image: $($_.Exception.Message)" $true }
     }
 })
@@ -1454,10 +1597,11 @@ function Show-Order {
     $script:ow.Add_SourceInitialized({ Set-DarkTitleBar $this })
     $script:lb = $script:ow.FindName('Order'); $script:count = $script:ow.FindName('Count')
 
-    $games = @(Get-PimaxGames | ForEach-Object { $_ | Add-Member -NotePropertyName Id -NotePropertyValue (Get-GameId $_) -PassThru })
+    $games = @(Get-PimaxGames -WithPending | ForEach-Object { $_ | Add-Member -NotePropertyName Id -NotePropertyValue (Get-GameId $_) -PassThru })
     $pinned = @(Get-PinnedIds)
     $byId = @{}; foreach ($g in $games) { $byId[$g.Id] = $g }
-    $script:unknownPins = @($pinned | Where-Object { -not $byId.ContainsKey($_) })
+    $removing = Get-PendingRemovedIds
+    $script:unknownPins = @($pinned | Where-Object { -not $byId.ContainsKey($_) -and $removing -notcontains $_ })
     $ordered = @($pinned | Where-Object { $byId.ContainsKey($_) } | ForEach-Object { $byId[$_] })
     $ordered += @($games | Where-Object { $pinned -notcontains $_.Id } | Sort-Object { Get-PimaxOrderKey $_ $_.Id })
 
@@ -1615,11 +1759,17 @@ function Show-Order {
         $ids = @($script:lb.Items | Where-Object { $_.Tag.Check.IsChecked } | ForEach-Object { $_.Tag.Game.Id }) + $script:unknownPins
         $client = Get-ClientPath
         try {
-            Save-PinnedOrder $ids
+            $waiting = $script:Pending.Count
+            if ($waiting) {
+                # Games waiting to be added or removed need the full stop, so do the order in the same restart
+                [void](Invoke-WhilePimaxStopped { Save-PinnedOrder $ids })
+            } else {
+                Save-PinnedOrder $ids
+                Start-Sleep -Seconds 1
+                if (Test-Path $client) { Start-Process $client }
+            }
             Save-AutoSnapshot
-            Start-Sleep -Seconds 1
-            if (Test-Path $client) { Start-Process $client }
-            $script:orderResult = "Library order saved ($($ids.Count) pinned). Pimax Play restarted."
+            $script:orderResult = "Library order saved ($($ids.Count) pinned)" + $(if ($waiting) { " and $script:LastApplied waiting change(s) applied" } else { '' }) + ". Pimax Play restarted."
             $script:ow.Close()
         } catch {
             [Windows.MessageBox]::Show("Couldn't save the order: $($_.Exception.Message)", 'Library order', 'OK', 'Error') | Out-Null
@@ -1634,7 +1784,7 @@ function Show-Order {
 
 $ui.OrderBtn.Add_Click({
     try { Show-Order } catch { Set-Status "Library order failed: $($_.Exception.Message)" $true; return }
-    if ($script:orderResult) { Set-Status $script:orderResult }
+    if ($script:orderResult) { Fill-List; Set-Status $script:orderResult }
 })
 
 # ---------- Game settings window ----------
@@ -1721,7 +1871,7 @@ function Show-GameSettings([string]$startId) {
     $script:gsPending = [ordered]@{}
     $script:gsSay = { param([string]$m, [bool]$bad = $false) $script:gsStatus.Foreground = $(if ($bad) { '#F87171' } else { '#4ADE80' }); $script:gsStatus.Text = $m }
 
-    $script:gsGames = @(Get-PimaxGames | ForEach-Object { $_ | Add-Member -NotePropertyName Id -NotePropertyValue (Get-GameId $_) -PassThru -Force } | Sort-Object Name)
+    $script:gsGames = @(Get-PimaxGames -WithPending | ForEach-Object { $_ | Add-Member -NotePropertyName Id -NotePropertyValue (Get-GameId $_) -PassThru -Force } | Sort-Object Name)
     $gItem = New-Object Windows.Controls.ListBoxItem
     $gItem.Tag = 'global'; $gItem.FontWeight = 'SemiBold'; $gItem.Padding = '6,5'
     [void]$script:targets.Items.Add($gItem)
@@ -1895,7 +2045,7 @@ function Show-GameSettings([string]$startId) {
         Save-AutoSnapshot
         $script:gsPending = [ordered]@{}
         & $script:loadTarget $script:gsTarget
-        & $script:gsSay ("Saved changes to $n game(s)." + $(if (-not $ok) { ' (Could not restart the Pimax service; restart your PC if it does not apply.)' } else { '' })) (-not $ok)
+        & $script:gsSay ("Saved changes to $n game(s)." + $(if ($script:LastApplied) { " Also applied $script:LastApplied waiting library change(s)." } else { '' }) + $(if (-not $ok) { ' (Could not restart the Pimax service; restart your PC if it does not apply.)' } else { '' })) (-not $ok)
         return $true
     }
 
@@ -2012,7 +2162,9 @@ function Show-GameSettings([string]$startId) {
 $ui.SettingsBtn.Add_Click({
     $g = Selected-Game
     $id = if ($g) { Get-GameId $g } else { 'global' }
+    $before = $script:Pending.Count
     try { Show-GameSettings $id } catch { Set-Status "Game settings failed: $($_.Exception.Message)" $true }
+    if ($script:Pending.Count -ne $before) { Fill-List }
 })
 
 # ---------- Add games window ----------
@@ -2020,7 +2172,7 @@ function Show-AddGames {
     $script:aw = New-DarkWindow 'Add games' 1000 680 @'
   <DockPanel Margin="16">
     <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="#B4BCCC" Margin="0,0,0,12"
-      Text="Add games to your Pimax Play library, the same way Import in Pimax Play does. Pick .exe files or shortcuts, or scan a folder (a Steam library, a folder of games, or one game's folder). Check the name and the .exe for each game, untick any you don't want, then click Add."/>
+      Text="Add games to your Pimax Play library, the same way Import in Pimax Play does. Pick .exe files or shortcuts, or scan a folder (a Steam library, a folder of games, or one game's folder). Check the name and the .exe for each game, untick any you don't want, then click Add. Nothing changes in Pimax Play until you apply your changes."/>
     <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,10">
       <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoPlus}" x:Name="APick" Content="Add .exe or shortcut..." Margin="0,0,8,0"
               Background="#2F6BFF" BorderBrush="#5B8CFF" FontWeight="SemiBold"/>
@@ -2137,19 +2289,16 @@ function Show-AddGames {
                     try { $entries[$i].Image = Find-AutoCover $entries[$i].Name $entries[$i].Route } catch { }
                 }
             }
-            & $script:aSay "Adding $($entries.Count) game(s) - restarting Pimax Play..."
-            $script:aw.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::Background)
             $r = Add-ImportedGames $entries
-            Save-AutoSnapshot
-            $msg = "Added $($r.Added.Count) game(s) to Pimax Play"
+            $msg = "$($r.Added.Count) game(s) ready to add"
             $withImg = @($r.Added | Where-Object { $_.HasImage }).Count
             if ($r.Added.Count) { $msg += " ($withImg with a cover image)" }
             $msg += '.'
             if ($r.Skipped.Count) { $msg += " Skipped: $($r.Skipped -join '; ')." }
             if ($r.ImageFailed.Count) { $msg += " Couldn't download an image for: $($r.ImageFailed -join ', ')." }
-            if (-not $r.ServiceOk) { $msg += ' Could not restart the Pimax service; restart your PC if the games do not show up.' }
             if ($r.Added.Count -and ($r.Added.Count - $withImg)) { $msg += ' Pick a game without an image and click Find image to give it one.' }
-            $script:addResult = [pscustomobject]@{ Message = $msg; Bad = (-not $r.ServiceOk -or -not $r.Added.Count); FirstId = $(if ($r.Added.Count) { $r.Added[0].Id } else { $null }) }
+            if ($r.Added.Count) { $msg += " $WaitingHint" }
+            $script:addResult = [pscustomobject]@{ Message = $msg; Bad = (-not $r.Added.Count); FirstId = $(if ($r.Added.Count) { $r.Added[0].Id } else { $null }) }
             $script:aw.Close()
         } catch {
             & $script:aSay "Couldn't add the games: $($_.Exception.Message)" $true
@@ -2180,7 +2329,7 @@ function Show-EditGame($game) {
       <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoTrash}" x:Name="ERemove" DockPanel.Dock="Left" Content="Remove from library"
               Background="#3A1518" BorderBrush="#7F1D1D"/>
       <Button x:Name="ECancel" DockPanel.Dock="Right" Content="Cancel" Margin="8,0,0,0"/>
-      <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoCheck}" x:Name="ESave" DockPanel.Dock="Right" Content="Save and restart Pimax Play"
+      <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoCheck}" x:Name="ESave" DockPanel.Dock="Right" Content="Save"
               Background="#16A34A" BorderBrush="#22C55E" FontWeight="SemiBold"/>
       <Border/>
     </DockPanel>
@@ -2197,7 +2346,7 @@ function Show-EditGame($game) {
 '@
     $script:eGame = $game
     $script:editResult = $null
-    $script:ew.FindName('EInfo').Text = "Rename $($game.Name), or point it at a different .exe or shortcut (for example a mod's launcher). Removing it takes it out of Pimax Play only; the game itself isn't touched, and the library entry is kept in the app's backups folder."
+    $script:ew.FindName('EInfo').Text = "Rename $($game.Name), or point it at a different .exe or shortcut (for example a mod's launcher). Removing it takes it out of Pimax Play only; the game itself isn't touched, and the library entry is kept in the app's backups folder. Changes are applied with Apply & restart Pimax Play."
     $script:eName = $script:ew.FindName('EName'); $script:eRoute = $script:ew.FindName('ERoute'); $script:eStatus = $script:ew.FindName('EStatus')
     $script:eName.Text = $game.Name; $script:eRoute.Text = Get-Route $game
     $script:ew.FindName('ECancel').Add_Click({ $script:ew.Close() })
@@ -2210,24 +2359,18 @@ function Show-EditGame($game) {
     $script:ew.FindName('ESave').Add_Click({
         $name = $script:eName.Text.Trim(); $route = $script:eRoute.Text.Trim('"', ' ')
         if ($name -eq $script:eGame.Name -and $route -eq (Get-Route $script:eGame)) { $script:ew.Close(); return }
-        $script:eStatus.Foreground = '#4ADE80'; $script:eStatus.Text = 'Saving - restarting Pimax Play...'
-        $script:ew.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::Background)
         try {
-            $ok = Set-ImportedGame $script:eGame $name $route
-            Save-AutoSnapshot
-            $script:editResult = [pscustomobject]@{ Message = "Saved $name." + $(if (-not $ok) { ' Could not restart the Pimax service; restart your PC if it does not update.' } else { '' }); Bad = (-not $ok); Keep = $script:eGame.File }
+            Set-ImportedGame $script:eGame $name $route
+            $script:editResult = [pscustomobject]@{ Message = $(if ($script:Pending.Count) { "Changes to $name are waiting to be applied. $WaitingHint" } else { "$name is back to how it was." }); Bad = $false; Keep = $script:eGame.File }
             $script:ew.Close()
         } catch { $script:eStatus.Foreground = '#F87171'; $script:eStatus.Text = $_.Exception.Message }
     })
     $script:ew.FindName('ERemove').Add_Click({
-        $a = [Windows.MessageBox]::Show("Remove $($script:eGame.Name) from your Pimax Play library?`n`nThe game itself isn't touched, and you can add it again any time with Add games.", 'Remove game', 'YesNo', 'Warning')
+        $a = [Windows.MessageBox]::Show("Remove $($script:eGame.Name) from your Pimax Play library?`n`nThe game itself isn't touched, and you can add it again any time with Add games. It's removed when you apply your changes.", 'Remove game', 'YesNo', 'Warning')
         if ($a -ne 'Yes') { return }
-        $script:eStatus.Foreground = '#4ADE80'; $script:eStatus.Text = 'Removing - restarting Pimax Play...'
-        $script:ew.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::Background)
         try {
-            $r = Remove-ImportedGames @($script:eGame)
-            Save-AutoSnapshot
-            $script:editResult = [pscustomobject]@{ Message = "Removed $($script:eGame.Name) from Pimax Play." + $(if (-not $r.ServiceOk) { ' Could not restart the Pimax service; restart your PC if it still shows.' } else { '' }); Bad = (-not $r.ServiceOk); Keep = $null }
+            [void](Remove-ImportedGames @($script:eGame))
+            $script:editResult = [pscustomobject]@{ Message = $(if (@($script:Pending | Where-Object { $_.Kind -eq 'remove' -and $_.File -eq $script:eGame.File }).Count) { "$($script:eGame.Name) will be removed when you apply your changes. $WaitingHint" } else { "$($script:eGame.Name) won't be added after all." }); Bad = $false; Keep = $null }
             $script:ew.Close()
         } catch { $script:eStatus.Foreground = '#F87171'; $script:eStatus.Text = "Couldn't remove it: $($_.Exception.Message)" }
     })
@@ -2345,7 +2488,7 @@ function Show-Backups($preselect, $lost) {
     [void]$script:bw.ShowDialog()
 }
 
-$ui.BackupBtn.Add_Click({ try { Show-Backups $null $null } catch { Set-Status "Backup & restore failed: $($_.Exception.Message)" $true } })
+$ui.BackupBtn.Add_Click({ try { Show-Backups $null $null } catch { Set-Status "Backup & restore failed: $($_.Exception.Message)" $true }; Fill-List })
 
 # On start: if Pimax seems to have reset things since the last backup, offer to restore; otherwise take a backup
 function Start-BackupCheck {
@@ -2368,7 +2511,7 @@ function Start-BackupCheck {
         Save-AutoSnapshot
     } catch { }
 }
-$ui.ResetRestore.Add_Click({ try { Show-Backups $script:ResetSnap $script:ResetLost } catch { Set-Status "Backup & restore failed: $($_.Exception.Message)" $true } })
+$ui.ResetRestore.Add_Click({ try { Show-Backups $script:ResetSnap $script:ResetLost } catch { Set-Status "Backup & restore failed: $($_.Exception.Message)" $true }; Fill-List })
 $ui.ResetDismiss.Add_Click({ if ($script:ResetSnap) { Set-AppSetting 'dismissedSnapshot' $script:ResetSnap.created }; $ui.ResetBar.Visibility = 'Collapsed' })
 $window.Add_Loaded({ if ($Test) { return }; $window.Dispatcher.BeginInvoke([action]{ Start-BackupCheck }, [Windows.Threading.DispatcherPriority]::ApplicationIdle) | Out-Null })
 
@@ -2377,7 +2520,7 @@ $TutorialSteps = @(
     @{ Icon = 'Logo'; Title = 'Welcome to Pimax Game Manager'
        Body = "Keep your Pimax Play library the way you want it: your own tile images, your own order, graphics settings for many games at once, and backups that a Pimax update can't wipe.`n`nThis quick tour takes about a minute." },
     @{ Icon = 'IcoImage'; Title = 'Custom library images'
-       Body = "Pick an imported game on the left, then click Find image to search Steam and SteamGridDB, paste an image link, or Browse for a file. Click Apply image to use it.`n`nSteam and Oculus games get their image from the store every time Pimax starts. To give one your own image, add its .exe with Add games." },
+       Body = "Pick an imported game on the left, then click Find image to search Steam and SteamGridDB, paste an image link, or Browse for a file. Click Use image to use it.`n`nSteam and Oculus games get their image from the store every time Pimax starts. To give one your own image, add its .exe with Add games." },
     @{ Icon = 'IcoPlus'; Title = 'Add games'
        Body = "Add games... puts games into Pimax Play without using its Import button. Pick .exe files or shortcuts, or scan a folder such as a Steam library, and the app can find a cover image for each one.`n`nEdit / remove... renames an imported game, points it at a different .exe (handy for mods), or takes it out of the library." },
     @{ Icon = 'IcoList'; Title = 'Library order'
@@ -2386,8 +2529,8 @@ $TutorialSteps = @(
        Body = "Edit Pimax's per-game graphics settings in one place. Tick Custom to give a game its own value; everything else follows Global.`n`nApply to... copies one setting to other games, and nothing is written until you click Save all changes." },
     @{ Icon = 'IcoArchive'; Title = 'Backups'
        Body = "A backup is saved automatically whenever you change something here. If a Pimax update resets your images, order, settings or headset setup, an orange bar offers to put them back.`n`nYou can also restore any backup yourself from Backup & restore." },
-    @{ Icon = 'IcoPower'; Title = 'Before you apply changes'
-       Body = "Saving changes restarts Pimax Play and its service so they take effect, so do it when you're not in a game.`n`nYou can open this tour again any time from Tutorial at the bottom of the window." }
+    @{ Icon = 'IcoPower'; Title = 'Applying changes'
+       Body = "New games, edits and images wait in a yellow bar at the top until you click Apply & restart Pimax Play, so you can make lots of changes and restart Pimax once. If you close the app first, it asks whether to apply them.`n`nApplying restarts Pimax Play and its service, so do it when you're not in a game. Library order and Game settings saves apply waiting changes in the same restart.`n`nYou can open this tour again any time from Tutorial at the bottom of the window." }
 )
 
 function Show-Tutorial {
@@ -2542,6 +2685,13 @@ function Start-SelfUpdate {
     $inst = Get-InstallKind
     $asset = if ($inst.Kind -eq 'installed') { $info.Setup } else { $info.Exe }
     if ($inst.Kind -eq 'script' -or -not $asset) { Start-Process $info.Url; return }
+    if ($script:Pending.Count) {
+        $n = $script:Pending.Count
+        $a = [Windows.MessageBox]::Show("You have $n change(s) that haven't been applied to Pimax Play yet. Apply them before updating? Pimax Play will restart.`n`nYes: apply, then update.   No: throw them away and update.   Cancel: don't update now.", 'Update', 'YesNoCancel', 'Question')
+        if ($a -eq 'Cancel') { return }
+        if ($a -eq 'No') { $script:Pending.Clear(); Fill-List }
+        elseif (-not (Invoke-ApplyPending)) { return }
+    }
     $dir = Join-Path $env:TEMP 'PimaxGameManager-update'
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
     $script:UpdDownload = Join-Path $dir ("{0}-{1}" -f $info.Version, [IO.Path]::GetFileName(([uri]$asset.Url).LocalPath))
@@ -2658,7 +2808,7 @@ $window.Add_Loaded({ if (-not $Test) { Start-UpdateCheck } })
 $window.Add_Loaded({ if ($Test -or (Get-AppSetting 'hideTutorial')) { return }; $window.Dispatcher.BeginInvoke([action]{ try { Show-Tutorial } catch { } }, [Windows.Threading.DispatcherPriority]::ApplicationIdle) | Out-Null })
 $ui.TutorialLink.Add_MouseLeftButtonUp({ try { Show-Tutorial } catch { Set-Status "Tutorial failed: $($_.Exception.Message)" $true } })
 
-$ui.RestartBtn.Add_Click({ Finish-Restart 'Pimax Play restarted.' })
+$ui.RestartBtn.Add_Click({ [void](Invoke-ApplyPending) })
 $ui.RefreshBtn.Add_Click({ Fill-List; Set-Status 'Library list refreshed.' })
 
 Fill-List
@@ -2684,9 +2834,19 @@ if ($Test) {
         $pick = $ui.GameList.Items | Where-Object { $_.Tag.Source -eq 'Imported' -and $_.Tag.Icon } | Select-Object -First 1
         if ($pick) { $ui.GameList.SelectedItem = $pick }
         Save-Shot $window 'main'
+        if ($pick -and $env:PGM_SCAN) {
+            # Waiting changes are only held in memory, so nothing is written
+            $s = @(Find-GameExes $env:PGM_SCAN | Where-Object { -not (Get-LibraryRoutes)[(Get-RouteKey $_.Route)] } | Select-Object -First 2)
+            [void](Add-ImportedGames @($s | ForEach-Object { [pscustomobject]@{ Name = $_.Name; Route = $_.Route } }))
+            $rn = Get-PimaxGames | Where-Object { $_.Source -eq 'Imported' -and $_.File -ne $pick.Tag.File } | Select-Object -First 1
+            if ($rn) { Set-ImportedGame $rn ($rn.Name + ' VR') (Get-Route $rn) }
+            Fill-List; Set-Status "$($s[0].Name) is ready to add. $WaitingHint"
+            Save-Shot $window 'main-pending'
+            $script:Pending.Clear(); Fill-List
+        }
         $tw = Show-Tutorial; Save-Shot $tw 'tutorial-1'
         $script:tIndex = 1; & $script:tRender; Save-Shot $tw 'tutorial-2'
-        $script:tIndex = 5; & $script:tRender; Save-Shot $tw 'tutorial-6'
+        $script:tIndex = 6; & $script:tRender; Save-Shot $tw 'tutorial-7'
         $tw.Close()
         [void](Show-Order); Save-Shot $script:ow 'order'; $script:ow.Close()
         $sid = if ($pick) { Get-GameId $pick.Tag } else { 'global' }
@@ -2724,7 +2884,7 @@ if ($Test) {
     $BackupDir = Join-Path $AppConfigDir '_backups'; New-Item -ItemType Directory $BackupDir | Out-Null
     $SnapshotDir = Join-Path $AppConfigDir '_snapshots'; New-Item -ItemType Directory $SnapshotDir | Out-Null
     $script:restarts = 0
-    function Invoke-WhilePimaxStopped([scriptblock]$action, [switch]$Full) { $script:restarts++; if ($Full) { $script:fullRestarts++ }; & $action; $script:RuntimeBack = $true; return $true }
+    function Invoke-WhilePimaxStopped([scriptblock]$action, [switch]$Full) { $script:restarts++; if ($Full) { $script:fullRestarts++ }; Write-PendingChanges; & $action; $script:RuntimeBack = $true; return $true }
     foreach ($f in Get-ChildItem $AppConfigDir -Filter *.json) {
         $before = [IO.File]::ReadAllText($f.FullName) -replace "`r`n", "`n"
         Write-GameSettings $f.BaseName (Read-GameSettings $f.BaseName)
@@ -2780,7 +2940,7 @@ if ($Test) {
     "  real AppConfig untouched: " + (-not (Test-Path (Join-Path $realCfg 'steam.app.620980.json')))
     Remove-Item $AppConfigDir -Recurse -Force
     "--- Backup & restore (on temporary copies; Pimax is not touched):"
-    $keepManifest = $ManifestDir; $keepClient = $ClientConfig
+    $keepManifest = $ManifestDir; $keepClient = $ClientConfig; $keepCovers = $CoverDir
     $bt = Join-Path $env:TEMP ('pgm-bk-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory $bt | Out-Null
     Copy-Item $ManifestDir (Join-Path $bt 'manifest') -Recurse; $ManifestDir = Join-Path $bt 'manifest'
@@ -2834,7 +2994,7 @@ if ($Test) {
     $manual = Get-Snapshots | Where-Object { $_.reason -eq 'Manual' } | Select-Object -First 1
     "  deleted: " + (Remove-Snapshots @($manual.Path)) + "; backups left: " + ((Get-Snapshots | ForEach-Object reason) -join ', ')
     try { Remove-Snapshots @($AppConfigDir) | Out-Null; "  SAFETY FAILED: deleted a non-backup folder" } catch { "  refuses non-backup folder: " + $_.Exception.Message.Substring(0, 22) + " ... (still exists: $(Test-Path $AppConfigDir))" }
-    "--- Add / edit / remove games (on the temporary copies):"
+    "--- Add / edit / remove games and waiting changes (on the temporary copies):"
     $gdir = Join-Path $bt 'games'
     foreach ($f in 'Cool Game\CoolGame.exe', 'Cool Game\unins000.exe', 'Cool Game\CrashReporter.exe', 'Cool Game\Tools\CoolGameEditor.exe', 'Other Thing\bin\win64\Launcher.exe', 'Other Thing\bin\win64\OtherThing.exe', 'Tiny\tiny.exe') {
         $p = Join-Path $gdir $f; New-Item -ItemType Directory -Force (Split-Path $p) | Out-Null; Copy-Item "$env:WINDIR\System32\notepad.exe" $p
@@ -2842,8 +3002,9 @@ if ($Test) {
     [IO.File]::WriteAllBytes((Join-Path $gdir 'Tiny\tiny.exe'), (New-Object byte[] 1000))
     $found = @(Find-GameExes $gdir)
     "  scan found: " + (($found | ForEach-Object { "$($_.Name) -> $($_.Route.Substring($gdir.Length + 1))" }) -join '; ')
-    $script:restarts = 0
-    $before = @(Get-ChildItem $ManifestDir -Filter *.json).Count
+    $hashDir = { (Get-ChildItem $ManifestDir -Filter *.json | Sort-Object Name | ForEach-Object { $_.Name + (Get-FileHash $_.FullName -Algorithm MD5).Hash }) -join ',' }
+    $diskBefore = & $hashDir; $pinsBefore = (Get-PinnedIds) -join ','
+    $script:restarts = 0; $script:Pending.Clear()
     $aw = Show-AddGames
     foreach ($f in $found) { [void](& $script:aAddRow $f.Name $f.Route $f.Others) }
     $crysisRoute = Get-Route (Get-PimaxGames | Where-Object { $_.Name -eq 'CrysisVR' } | Select-Object -First 1)
@@ -2854,37 +3015,80 @@ if ($Test) {
     $script:aImages.IsChecked = $false
     $script:aRows[0].Name.Text = 'Cool Game VR'
     $script:aAddBtn.RaiseEvent((New-Object Windows.RoutedEventArgs([Windows.Controls.Primitives.ButtonBase]::ClickEvent)))
-    "  result: $($script:addResult.Message)  restarts: $script:restarts"
-    $newFiles = @(Get-ChildItem $ManifestDir -Filter *.json | Where-Object { ([IO.File]::ReadAllText($_.FullName)) -match 'Cool Game VR|Other Thing' })
-    "  manifests: $before -> $(@(Get-ChildItem $ManifestDir -Filter *.json).Count); new ones: $($newFiles.Count)"
-    foreach ($f in $newFiles) { $b = [IO.File]::ReadAllBytes($f.FullName); "  $($f.Name) (BOM: $($b[0] -eq 0xEF)): " + [IO.File]::ReadAllText($f.FullName).Replace($gdir, '<games>') }
-    $cool = Get-PimaxGames | Where-Object { $_.Name -eq 'Cool Game VR' }
-    "  listed as: $($cool.Source); id format ok: $((Get-GameId $cool) -match '^local\.[0-9a-f]{8}$')"
-    $r2 = Add-ImportedGames @([pscustomobject]@{ Name = 'Again'; Route = $cool | ForEach-Object { Get-Route $_ }; Image = $null }, [pscustomobject]@{ Name = 'Missing'; Route = 'C:\nope\x.exe'; Image = $null })
-    "  adding again: added $($r2.Added.Count); skipped: $($r2.Skipped -join '; ')"
-    $img = Get-ChildItem $CoverDir, (Join-Path $env:APPDATA 'PimaxGameManager\covers') -File -ErrorAction SilentlyContinue | Select-Object -First 1
+    "  result: $($script:addResult.Message)"
+    "  queued, not written: restarts $script:restarts; Pimax files unchanged: $((& $hashDir) -eq $diskBefore); waiting: $($script:Pending.Count)"
+    $view = Get-PimaxGames -WithPending
+    $cool = $view | Where-Object { $_.Name -eq 'Cool Game VR' }
+    "  shown in the list as: $($cool.Source) / $($cool.Pending); id format ok: $((Get-GameId $cool) -match '^local\.[0-9a-f]{8}$')"
+    $r2 = Add-ImportedGames @([pscustomobject]@{ Name = 'Again'; Route = (Get-Route $cool); Image = $null }, [pscustomobject]@{ Name = 'Missing'; Route = 'C:\nope\x.exe'; Image = $null })
+    "  adding a waiting game again: added $($r2.Added.Count); skipped: $($r2.Skipped -join '; ')"
+    $img = Get-ChildItem $keepCovers -File -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($img) {
-        $r3 = Add-ImportedGames @([pscustomobject]@{ Name = 'Tiny'; Route = (Join-Path $gdir 'Tiny\tiny.exe'); Image = $img.FullName })
-        $tiny = Get-PimaxGames | Where-Object { $_.Name -eq 'Tiny' }
-        "  with image: added $($r3.Added.Count), icon copied into covers: $($tiny.Icon.StartsWith($CoverDir) -and (Test-Path $tiny.Icon))"
+        [void](Add-ImportedGames @([pscustomobject]@{ Name = 'Tiny'; Route = (Join-Path $gdir 'Tiny\tiny.exe'); Image = $img.FullName }))
+        $tiny = Get-PimaxGames -WithPending | Where-Object { $_.Name -eq 'Tiny' }
+        "  with image: icon copied into covers: $($tiny.Icon.StartsWith($CoverDir) -and (Test-Path $tiny.Icon))"
     }
-    # Edit: rename and point at the other exe
+    # Edit a game that is still waiting to be added: folds into the add
     $ew = Show-EditGame $cool
     $script:eName.Text = 'Cool Game (mod)'; $script:eRoute.Text = (Join-Path $gdir 'Cool Game\Tools\CoolGameEditor.exe')
     $script:ew.FindName('ESave').RaiseEvent((New-Object Windows.RoutedEventArgs([Windows.Controls.Primitives.ButtonBase]::ClickEvent)))
-    $cool2 = Get-PimaxGames | Where-Object { $_.File -eq $cool.File }
-    "  edited: $($cool2.Name) -> $(Split-Path (Get-Route $cool2) -Leaf); message: $($script:editResult.Message); safety copy: $(@(Get-ChildItem (Join-Path $BackupDir 'edited-games')).Count)"
+    $ew.Close()
+    $cool2 = Get-PimaxGames -WithPending | Where-Object { $_.File -eq $cool.File }
+    "  edited waiting game: $($cool2.Name) -> $(Split-Path (Get-Route $cool2) -Leaf); still one change for it: $(@($script:Pending | Where-Object { $_.File -eq $cool.File }).Count -eq 1); message: $($script:editResult.Message.Substring(0, 40))..."
     try { Set-ImportedGame $cool2 'X' $crysisRoute; '  EDIT SAFETY FAILED' } catch { "  refuses an exe already in the library: $($_.Exception.Message)" }
-    try { Set-ImportedGame (Get-PimaxGames | Where-Object Source -ne 'Imported' | Select-Object -First 1) 'X' $crysisRoute; '  EDIT SAFETY FAILED' } catch { "  refuses Steam games: $($_.Exception.Message.Substring(0, 40))..." }
-    # Remove: pin it first, then check it comes off the pinned list
-    $cid = Get-GameId $cool2
-    $pins = @(Get-PinnedIds) + $cid
-    [IO.File]::WriteAllText($ClientConfig, (Set-PinnedIdsInText ([IO.File]::ReadAllText($ClientConfig)) $pins), $Utf8NoBom)
-    $before = @(Get-ChildItem $ManifestDir -Filter *.json).Count
-    $rm = Remove-ImportedGames @($cool2, (Get-PimaxGames | Where-Object Source -ne 'Imported' | Select-Object -First 1))
-    "  removed: $($rm.Removed) (Steam game ignored); manifests $before -> $(@(Get-ChildItem $ManifestDir -Filter *.json).Count); entry kept in backups: $(@(Get-ChildItem (Join-Path $BackupDir 'removed-games')).Count -eq 1); still pinned: $((Get-PinnedIds) -contains $cid); other pins kept: $(@(Get-PinnedIds).Count)"
-    "  restarts for add/add/add/edit/remove: $script:restarts"
-    $aw.Close(); $ew.Close()
+    try { Set-ImportedGame ($view | Where-Object Source -ne 'Imported' | Select-Object -First 1) 'X' $crysisRoute; '  EDIT SAFETY FAILED' } catch { "  refuses Steam games: $($_.Exception.Message.Substring(0, 40))..." }
+    # Remove a game that is still waiting to be added: it just drops out
+    $other = Get-PimaxGames -WithPending | Where-Object { $_.Name -eq 'Other Thing' }
+    [void](Remove-ImportedGames @($other))
+    "  removing a waiting game drops it: $(-not (Get-PimaxGames -WithPending | Where-Object { $_.Name -eq 'Other Thing' }))"
+    # Existing games: new image, rename (and rename back = no change), remove a pinned one
+    $crysis = Get-PimaxGames | Where-Object { $_.Name -eq 'CrysisVR' }
+    $origFile = Get-OrigBackupPath $crysis
+    $crysisOrigIcon = if ($origFile) { [string](([IO.File]::ReadAllText($origFile)) | ConvertFrom-Json).icon } else { [string]$crysis.Icon }
+    $newIcon = Save-Cover $crysis $img.FullName
+    $iracing = Get-PimaxGames | Where-Object { $_.Name -eq 'iRacingUI' }
+    Set-ImportedGame $iracing 'iRacing' (Get-Route $iracing)
+    $n1 = $script:Pending.Count; Set-ImportedGame $iracing 'iRacingUI' (Get-Route $iracing); $n2 = $script:Pending.Count
+    "  rename and rename back: waiting $n1 -> $n2"
+    Set-ImportedGame $iracing 'iRacing' (Get-Route $iracing)
+    $ats = Get-PimaxGames | Where-Object { $_.Name -eq 'amtrucks' }
+    $atsId = Get-GameId $ats
+    [IO.File]::WriteAllText($ClientConfig, (Set-PinnedIdsInText ([IO.File]::ReadAllText($ClientConfig)) (@(Get-PinnedIds) + $atsId)), $Utf8NoBom)
+    [void](Remove-ImportedGames @($ats, ($view | Where-Object Source -ne 'Imported' | Select-Object -First 1)))
+    $v2 = Get-PimaxGames -WithPending
+    "  list preview: Crysis icon is the new one: $(($v2 | Where-Object { $_.File -eq $crysis.File }).Icon -eq $newIcon); iRacing renamed: $([bool]($v2 | Where-Object { $_.Name -eq 'iRacing' })); amtrucks hidden: $(-not ($v2 | Where-Object { $_.File -eq $ats.File })); Steam game not removable: $([bool]($v2 | Where-Object Source -ne 'Imported'))"
+    "  Pimax files still unchanged: $((& $hashDir) -eq $diskBefore); restarts: $script:restarts"
+    Fill-List
+    "  bar: visible $($ui.PendingBar.Visibility -eq 'Visible'); '$($ui.PendingText.Text)'"
+    "  list badges: " + (@($ui.GameList.Items | Where-Object { $_.Tag.Pending } | ForEach-Object { "$($_.Tag.Name)=$($_.Tag.Pending)" }) -join ', ')
+    # Library order shows the waiting games and won't re-pin the one being removed
+    [void](Show-Order)
+    "  order window lists waiting games: $([bool]($script:lb.Items | Where-Object { $_.Tag.Game.Name -eq 'Cool Game (mod)' })); removed game not kept as unknown pin: $($script:unknownPins -notcontains $atsId)"
+    $script:ow.Close()
+    # Apply everything in one restart
+    $ok = Invoke-ApplyPending
+    "  applied: $ok; restarts: $script:restarts; waiting now: $($script:Pending.Count); bar hidden: $($ui.PendingBar.Visibility -eq 'Collapsed'); status: $($ui.Status.Text)"
+    $newFiles = @(Get-ChildItem $ManifestDir -Filter *.json | Where-Object { ([IO.File]::ReadAllText($_.FullName)) -match 'Cool Game|Tiny' })
+    foreach ($f in $newFiles) { $b = [IO.File]::ReadAllBytes($f.FullName); "  $($f.Name) (BOM: $($b[0] -eq 0xEF)): " + [IO.File]::ReadAllText($f.FullName).Replace($gdir, '<games>').Replace($CoverDir, '<covers>') }
+    $cj = [IO.File]::ReadAllText($crysis.File) | ConvertFrom-Json
+    "  Crysis icon written: $($cj.icon -eq $newIcon); original kept for Restore: $([bool](Get-OrigBackupPath $crysis))"
+    "  iRacing renamed on disk: $((([IO.File]::ReadAllText($iracing.File)) | ConvertFrom-Json).name); old entry copied: $(@(Get-ChildItem (Join-Path $BackupDir 'edited-games')).Count)"
+    "  amtrucks removed: $(-not (Test-Path $ats.File)); kept in backups: $(@(Get-ChildItem (Join-Path $BackupDir 'removed-games')).Count -eq 1); unpinned: $((Get-PinnedIds) -notcontains $atsId); other pins kept: $(@(Get-PinnedIds).Count)"
+    # Restore original is queued too, and puts back the old icon when applied
+    Restore-Cover (Get-PimaxGames | Where-Object { $_.File -eq $crysis.File })
+    "  restore queued: $($script:Pending.Count) ($(Get-PendingLabel $script:Pending[0]))"
+    [void](Invoke-ApplyPending)
+    "  back to the original icon: $([string]((([IO.File]::ReadAllText($crysis.File)) | ConvertFrom-Json).icon) -eq $crysisOrigIcon); .orig cleared: $(-not (Get-OrigBackupPath $crysis))"
+    # Image waiting on a game with no custom image, then Restore original: just cancels it
+    $tg = Get-PimaxGames | Where-Object { $_.Name -eq 'Tiny' }
+    [void](Save-Cover $tg $img.FullName); $c1 = $script:Pending.Count
+    Restore-Cover $tg; "  undoing a waiting image on a game with no custom image before: waiting $c1 -> $($script:Pending.Count)"
+    # Any other save that restarts Pimax applies waiting changes too (game settings, order, restore use Invoke-WhilePimaxStopped)
+    [void](Add-ImportedGames @([pscustomobject]@{ Name = 'Late'; Route = (Join-Path $gdir 'Other Thing\bin\win64\Launcher.exe') }))
+    $r0 = $script:restarts
+    [void](Invoke-WhilePimaxStopped { })
+    "  applied by another save: waiting $($script:Pending.Count); written: $([bool](Get-PimaxGames | Where-Object { $_.Name -eq 'Late' })); extra restarts: $($script:restarts - $r0)"
+    $aw.Close()
     $ManifestDir = $keepManifest; $ClientConfig = $keepClient
     Remove-Item $bt -Recurse -Force
     "--- Self-update (temporary folder):"

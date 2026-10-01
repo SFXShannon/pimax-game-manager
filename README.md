@@ -8,7 +8,7 @@ A Windows tool for managing your **Pimax Play** library: add games (one at a tim
 
 *Formerly Pimax Cover Changer.*
 
-![Pimax Game Manager](screenshots/main-window-v1.7.0.png)
+![Pimax Game Manager](screenshots/main-window-v1.7.2.png)
 
 ## Download
 
@@ -28,6 +28,16 @@ The first time you open the app, a short tour walks through images, adding games
 
 Tick **Don't show this at startup** to stop it opening each time. You can open it again whenever you like with **Tutorial** at the bottom of the main window.
 
+## Waiting changes
+
+Adding games, editing or removing them, and changing images don't restart Pimax Play one at a time. They wait in a yellow bar at the top of the window until you're done:
+
+- The library list already shows them: games waiting to be added are marked **New**, and edited games **Changed**. Games waiting to be removed are hidden.
+- **Apply & restart Pimax Play** writes everything at once and restarts Pimax Play once. Do it when you're not in a game.
+- **Discard** throws the waiting changes away. Nothing has been written to Pimax Play yet.
+- If you close the app with changes waiting, it asks whether to apply them, throw them away, or keep working.
+- Saving **Library order** or **Game settings**, restoring a backup, **Restart Pimax Play** and updating the app all apply waiting changes in the same restart. Games waiting to be added already appear in Library order and Game settings, so you can place them and set them up before applying.
+
 ## Add games
 
 **Add games...** puts games into your Pimax Play library without using Pimax's **Import** button. It creates exactly the same kind of entry Import does, so Pimax treats them as imported games.
@@ -39,7 +49,7 @@ Tick **Don't show this at startup** to stop it opening each time. You can open i
 - Each row shows the name Pimax will display (edit it if you like) and the program Pimax will start. If the scan picked the wrong .exe, choose another from the dropdown.
 - Games already in your library are unticked and marked **Already in your library**, so nothing is added twice.
 - **Find a cover image for each game automatically** uses Steam's banner for games in a Steam library, otherwise an exact Steam store match, otherwise SteamGridDB (with a key). Games without a match can be given an image afterwards with **Find image**.
-- **Add games** adds everything ticked and restarts Pimax Play once.
+- **Add games** adds everything ticked to your [waiting changes](#waiting-changes). Nothing changes in Pimax Play until you apply them.
 
 SteamVR games already show up in Pimax by themselves. Adding one here as well gives you a second entry that you *can* give your own image.
 
@@ -49,7 +59,9 @@ Pick an imported game and click **Edit / remove...** to:
 
 - **Rename** it.
 - **Change the program** it starts, for example to point it at a mod's .exe or launcher.
-- **Remove from library**. The game itself isn't touched; only its Pimax Play entry is removed, and it's taken off your pinned list. The entry is kept in `%APPDATA%\PimaxGameManager\backups\removed-games`. Edits keep a copy of the old entry in `backups\edited-games`.
+- **Remove from library**. The game itself isn't touched; only its Pimax Play entry is removed, and it's taken off your pinned list.
+
+Edits and removals are [waiting changes](#waiting-changes) too. The entry is kept in `%APPDATA%\PimaxGameManager\backups\removed-games`. Edits keep a copy of the old entry in `backups\edited-games`.
 
 Steam and Oculus entries can't be edited or removed here, because Pimax rebuilds them from those stores.
 
@@ -59,12 +71,12 @@ Custom images work for imported games (added with **Add games** or Pimax's **Imp
 
 1. Pick an imported game from your Pimax library on the left.
 2. Click **Find image** to search for art automatically, or paste an image link, or click **Browse...** for an image file.
-3. Click **Apply image**. The tool saves the image, updates the game's entry, and restarts Pimax Play.
+3. Click **Use image**. The image is saved and shown straight away, and the change waits with your other [waiting changes](#waiting-changes) until you click **Apply & restart Pimax Play**.
 
 Wide banner images (about 460x215 or 920x430) fit Pimax tiles best.
 
-- **Restore original** puts a game back to its original image.
-- **Restart Pimax Play** (top right) restarts Pimax without changing anything.
+- **Restore original** puts a game back to its original image (also a waiting change). On an image you haven't applied yet, it just cancels it.
+- **Restart Pimax Play** (top right) restarts Pimax, applying any waiting changes.
 
 ### Find image
 
@@ -128,7 +140,7 @@ Backups are stored in %APPDATA%\PimaxGameManager\snapshots, outside Pimax's fold
 
 ## Updates
 
-When the app opens, it checks this repo for a newer release in the background. If there is one, a bar at the top offers **Update now**. Click it and the app:
+When the app opens, it checks this repo for a newer release in the background. (If you have waiting changes when you click **Update now**, it asks whether to apply them first.) If there is one, a bar at the top offers **Update now**. Click it and the app:
 
 1. downloads the new version from the GitHub release (progress shows in the bar),
 2. checks the download (its size, GitHub's SHA-256 checksum when listed, and the version number inside the file),
@@ -176,13 +188,13 @@ powershell -ExecutionPolicy Bypass -File .\PimaxGameManager.ps1
 
 ```powershell
 Install-Module ps2exe -Scope CurrentUser
-Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.7.1
+Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.7.2
 ```
 
 To build the installer too, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
-& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.7.1 .\PimaxGameManager.iss
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.7.2 .\PimaxGameManager.iss
 ```
 
 The app icon and `assets/logo.png` are generated from the logo shapes used in the app:
