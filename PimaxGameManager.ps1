@@ -36,7 +36,7 @@ try {
     if ((Test-Path $legacyCfg) -and -not (Test-Path $newCfg)) { Copy-Item $legacyCfg $newCfg }
 } catch { }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
-$AppVersion = '1.7.2'
+$AppVersion = '1.7.3'
 $RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-game-manager/releases/latest'
 
 # ---------- Library ----------
@@ -152,6 +152,8 @@ function Get-SgdbKey { $k = Get-AppSetting 'sgdbKey'; if ($k) { return [string]$
 function Set-SgdbKey([string]$key) { Set-AppSetting 'sgdbKey' $key }
 
 function Resolve-SteamAppId($game) {
+    # A game still waiting to be added has no entry file yet; use the program it will start
+    if (-not (Test-Path -LiteralPath $game.File)) { return (Resolve-SteamAppIdFromRoute (Get-Route $game)) }
     $j = [IO.File]::ReadAllText($game.File).TrimStart([char]0xFEFF) | ConvertFrom-Json
     if ([string]$j.id -match '^steam\.app\.(\d+)$') { return $Matches[1] }
     return (Resolve-SteamAppIdFromRoute ([string]$j.route))
@@ -2842,6 +2844,8 @@ if ($Test) {
             if ($rn) { Set-ImportedGame $rn ($rn.Name + ' VR') (Get-Route $rn) }
             Fill-List; Set-Status "$($s[0].Name) is ready to add. $WaitingHint"
             Save-Shot $window 'main-pending'
+            $wg = Get-PimaxGames -WithPending | Where-Object { $_.Pending -eq 'new' } | Select-Object -First 1
+            if ($wg) { $script:FinderTerm = $null; $fw = Show-Finder $wg; "  finder on waiting game $($wg.Name): $(@($fw.FindName('Results').Children).Count) images"; Save-Shot $fw 'finder-pending'; $fw.Close() }
             $script:Pending.Clear(); Fill-List
         }
         $tw = Show-Tutorial; Save-Shot $tw 'tutorial-1'
@@ -3020,6 +3024,8 @@ if ($Test) {
     $view = Get-PimaxGames -WithPending
     $cool = $view | Where-Object { $_.Name -eq 'Cool Game VR' }
     "  shown in the list as: $($cool.Source) / $($cool.Pending); id format ok: $((Get-GameId $cool) -match '^local\.[0-9a-f]{8}$')"
+    $fa = try { $x = Find-Art $cool $cool.Name $true; "ok, $(@($x.Items).Count) images" } catch { "FAILED: $($_.Exception.Message)" }; "  Find image on a waiting game: $fa"
+    $sa = try { (Resolve-SteamAppId ([pscustomobject]@{ File = (Join-Path $ManifestDir 'local.nothere.json'); Route = $crysisRoute })) } catch { "FAILED: $($_.Exception.Message)" }; "  Steam lookup for a waiting game in a Steam library: $sa"
     $r2 = Add-ImportedGames @([pscustomobject]@{ Name = 'Again'; Route = (Get-Route $cool); Image = $null }, [pscustomobject]@{ Name = 'Missing'; Route = 'C:\nope\x.exe'; Image = $null })
     "  adding a waiting game again: added $($r2.Added.Count); skipped: $($r2.Skipped -join '; ')"
     $img = Get-ChildItem $keepCovers -File -ErrorAction SilentlyContinue | Select-Object -First 1
