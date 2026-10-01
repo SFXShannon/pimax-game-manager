@@ -36,7 +36,7 @@ try {
     if ((Test-Path $legacyCfg) -and -not (Test-Path $newCfg)) { Copy-Item $legacyCfg $newCfg }
 } catch { }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
-$AppVersion = '1.8.1'
+$AppVersion = '1.8.2'
 $RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-game-manager/releases/latest'
 
 # ---------- Library ----------
@@ -2574,7 +2574,7 @@ $window.Add_Loaded({ if ($Test) { return }; $window.Dispatcher.BeginInvoke([acti
 $TutorialSteps = @(
     @{ Icon = 'Logo'; Title = 'Welcome to Pimax Game Manager'
        Body = "Keep your Pimax Play library the way you want it: add and start games, your own tile images, your own order, graphics settings for many games at once, and backups that a Pimax update can't wipe.`n`nThis quick tour takes about a minute." },
-    @{ Icon = 'IcoPlay'; Title = 'Play games'
+    @{ Icon = 'IcoPlay'; Title = 'Play games'; Since = '1.8.0'
        Body = "Pick a game on the left and click Play at the top right, or just double-click it in the list.`n`nGames start the same way Pimax Play starts them: Steam games through Steam, imported and Oculus games from their own .exe. Which runtime a game uses (Pimax OpenXR or SteamVR) is still set in Pimax Play." },
     @{ Icon = 'IcoImage'; Title = 'Custom library images'
        Body = "Pick an imported game on the left, then click Find image to search Steam and SteamGridDB, paste an image link, or Browse for a file. Click Use image to use it.`n`nSteam and Oculus games get their image from the store every time Pimax starts. To give one your own image, add its .exe with Add games." },
@@ -2592,8 +2592,16 @@ $TutorialSteps = @(
        Body = "When a new version is out, a blue bar at the top offers Update now: the app downloads it, installs it and reopens. The bottom-right corner shows whether you're up to date.`n`nReport a problem opens a bug report on GitHub. You can open this tour again any time from Tutorial at the bottom of the window." }
 )
 
-function Show-Tutorial {
-    $script:tw = New-DarkWindow 'Welcome to Pimax Game Manager' 680 470 @'
+# Steps marked Since are shown once after an update, even to people who turned the tour off at startup.
+# 'tutorialSeen' is the app version when the tour was last seen; before 1.8.2 it wasn't recorded, so 1.7.3 is assumed.
+function Get-NewTutorialSteps([string]$seen = [string](Get-AppSetting 'tutorialSeen')) {
+    try { $seenV = [version]$seen } catch { $seenV = [version]'1.7.3' }
+    @($TutorialSteps | Where-Object { $_.Since -and [version]$_.Since -gt $seenV -and [version]$_.Since -le [version]$AppVersion })
+}
+
+function Show-Tutorial([object[]]$steps = $TutorialSteps, [switch]$WhatsNew) {
+    $script:tSteps = @($steps); $script:tWhatsNew = [bool]$WhatsNew
+    $script:tw = New-DarkWindow $(if ($WhatsNew) { "What's new in Pimax Game Manager" } else { 'Welcome to Pimax Game Manager' }) 680 470 @'
   <Grid>
     <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
     <Grid Margin="30,28,30,12">
@@ -2630,8 +2638,8 @@ function Show-Tutorial {
     $script:tHide = $script:tw.FindName('THide')
     $script:tHide.IsChecked = [bool](Get-AppSetting 'hideTutorial')
     $script:tRender = {
-        $w = $script:tw; $s = $TutorialSteps[$script:tIndex]; $last = ($script:tIndex -eq $TutorialSteps.Count - 1)
-        $w.FindName('TStep').Text = "STEP $($script:tIndex + 1) OF $($TutorialSteps.Count)"
+        $w = $script:tw; $s = $script:tSteps[$script:tIndex]; $last = ($script:tIndex -eq $script:tSteps.Count - 1)
+        $w.FindName('TStep').Text = $(if ($script:tWhatsNew) { "NEW SINCE YOUR LAST VERSION" + $(if ($script:tSteps.Count -gt 1) { "  -  $($script:tIndex + 1) OF $($script:tSteps.Count)" }) } else { "STEP $($script:tIndex + 1) OF $($script:tSteps.Count)" })
         $w.FindName('TTitle').Text = $s.Title
         $w.FindName('TBody').Text = $s.Body
         $isLogo = ($s.Icon -eq 'Logo')
@@ -2640,10 +2648,10 @@ function Show-Tutorial {
         if (-not $isLogo) { $w.FindName('TIcon').Data = $w.FindResource($s.Icon) }
         $w.FindName('TBack').Visibility = $(if ($script:tIndex -gt 0) { 'Visible' } else { 'Hidden' })
         $next = $w.FindName('TNext')
-        $next.Content = $(if ($last) { 'Get started' } else { 'Next' })
+        $next.Content = $(if (-not $last) { 'Next' } elseif ($script:tWhatsNew) { 'Got it' } else { 'Get started' })
         $next.Tag = $w.FindResource($(if ($last) { 'IcoCheck' } else { 'IcoArrowRight' }))
         $dots = $w.FindName('TDots'); $dots.Children.Clear()
-        for ($i = 0; $i -lt $TutorialSteps.Count; $i++) {
+        for ($i = 0; $i -lt $script:tSteps.Count -and $script:tSteps.Count -gt 1; $i++) {
             $d = New-Object Windows.Controls.Border
             $d.Height = 7; $d.CornerRadius = '3.5'; $d.Margin = '3,0'
             $d.Width = $(if ($i -eq $script:tIndex) { 20 } else { 7 })
@@ -2655,7 +2663,7 @@ function Show-Tutorial {
         param([int]$step)
         $n = $script:tIndex + $step
         if ($n -lt 0) { return }
-        if ($n -ge $TutorialSteps.Count) { $script:tw.Close(); return }
+        if ($n -ge $script:tSteps.Count) { $script:tw.Close(); return }
         $script:tIndex = $n; & $script:tRender
     }
     $script:tw.FindName('TNext').Add_Click({ & $script:tGo 1 })
@@ -2665,8 +2673,9 @@ function Show-Tutorial {
         elseif ($_.Key -eq 'Left') { & $script:tGo -1; $_.Handled = $true }
         elseif ($_.Key -eq 'Escape') { $script:tw.Close() }
     })
-    # Remember the "don't show at startup" choice (never in test mode)
-    $script:tw.Add_Closed({ if (-not $Test) { try { Set-AppSetting 'hideTutorial' ([bool]$script:tHide.IsChecked) } catch { } } })
+    if ($WhatsNew) { $script:tHide.Content = "Don't show the full tour at startup"; $script:tHide.ToolTip = 'New steps are still shown once after an update. Tutorial at the bottom of the window opens the full tour.' }
+    # Remember the "don't show at startup" choice and that this version's tour has been seen (never in test mode)
+    $script:tw.Add_Closed({ if (-not $Test) { try { Set-AppSetting 'hideTutorial' ([bool]$script:tHide.IsChecked); Set-AppSetting 'tutorialSeen' $AppVersion } catch { } } })
     & $script:tRender
     if ($script:Capture -or $Test) { return $script:tw }
     [void]$script:tw.ShowDialog()
@@ -2864,7 +2873,11 @@ $window.Add_Loaded({
     else { Set-Status "The update didn't install - details are in $(Join-Path $DataDir 'update.log')" $true }
 })
 $window.Add_Loaded({ if (-not $Test) { Start-UpdateCheck } })
-$window.Add_Loaded({ if ($Test -or (Get-AppSetting 'hideTutorial')) { return }; $window.Dispatcher.BeginInvoke([action]{ try { Show-Tutorial } catch { } }, [Windows.Threading.DispatcherPriority]::ApplicationIdle) | Out-Null })
+# Full tour at startup unless turned off; if it is off, steps added since the last version seen are shown once
+$window.Add_Loaded({ if ($Test) { return }; $window.Dispatcher.BeginInvoke([action]{ try {
+    if (-not (Get-AppSetting 'hideTutorial')) { Show-Tutorial }
+    else { $new = Get-NewTutorialSteps; if ($new.Count) { Show-Tutorial $new -WhatsNew } else { Set-AppSetting 'tutorialSeen' $AppVersion } }
+} catch { } }, [Windows.Threading.DispatcherPriority]::ApplicationIdle) | Out-Null })
 $ui.TutorialLink.Add_MouseLeftButtonUp({ try { Show-Tutorial } catch { Set-Status "Tutorial failed: $($_.Exception.Message)" $true } })
 
 $ui.RestartBtn.Add_Click({ [void](Invoke-ApplyPending) })
@@ -2908,6 +2921,8 @@ if ($Test) {
         $tw = Show-Tutorial
         for ($ti = 0; $ti -lt $TutorialSteps.Count; $ti++) { $script:tIndex = $ti; & $script:tRender; Save-Shot $tw "tutorial-$($ti + 1)" }
         $tw.Close()
+        $tw = Show-Tutorial (Get-NewTutorialSteps '1.7.3') -WhatsNew; Save-Shot $tw 'whats-new'
+        $tw.Close()
         [void](Show-Order); Save-Shot $script:ow 'order'; $script:ow.Close()
         $sid = if ($pick) { Get-GameId $pick.Tag } else { 'global' }
         $sw = Show-GameSettings $sid; Save-Shot $sw 'settings'; $sw.Close()
@@ -2934,6 +2949,11 @@ if ($Test) {
     }
     $ui.GameList.SelectedIndex = 0
     "  Play button enabled for '$($ui.GameTitle.Text)': $($ui.PlayBtn.IsEnabled)"
+    "--- Tour: new steps shown once to people who turned it off:"
+    foreach ($seen in '', '1.7.3', '1.8.0', $AppVersion, 'junk') { "  last seen '$seen' -> new steps: " + ((Get-NewTutorialSteps $seen | ForEach-Object Title) -join ', ') }
+    $tw = Show-Tutorial (Get-NewTutorialSteps '1.7.3') -WhatsNew
+    "  what's new window: '$($tw.Title)' / '$($tw.FindName('TStep').Text)' / button '$($tw.FindName('TNext').Content)' / checkbox '$($tw.FindName('THide').Content)'"
+    $tw.Close()
     "--- Update check (app version $AppVersion):"
     try {
         $rel = Invoke-RestMethod -UseBasicParsing -Uri $RepoApi -Headers @{ 'User-Agent' = 'pimax-game-manager' }

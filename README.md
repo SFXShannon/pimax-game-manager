@@ -28,6 +28,8 @@ The first time you open the app, a short tour walks through playing games, image
 
 Tick **Don't show this at startup** to stop it opening each time. You can open it again whenever you like with **Tutorial** at the bottom of the main window.
 
+Even with the tour turned off, when an update adds something new to it (such as **Play** in 1.8.0), just the new steps are shown once, the first time you open the updated app.
+
 ## Waiting changes
 
 Adding games, editing or removing them, and changing images don't restart Pimax Play one at a time. They wait in a yellow bar at the top of the window until you're done:
@@ -199,13 +201,13 @@ powershell -ExecutionPolicy Bypass -File .\PimaxGameManager.ps1
 
 ```powershell
 Install-Module ps2exe -Scope CurrentUser
-Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.8.1
+Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.8.2
 ```
 
 To build the installer too, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
-& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.8.1 .\PimaxGameManager.iss
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.8.2 .\PimaxGameManager.iss
 ```
 
 The app icon and `assets/logo.png` are generated from the logo shapes used in the app:
