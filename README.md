@@ -4,11 +4,11 @@
 
 [![Downloads](https://img.shields.io/github/downloads/SFXShannon/pimax-game-manager/total?label=downloads)](https://github.com/SFXShannon/pimax-game-manager/releases) [![Latest release](https://img.shields.io/github/v/release/SFXShannon/pimax-game-manager?label=latest)](https://github.com/SFXShannon/pimax-game-manager/releases/latest) [![License: MIT](https://img.shields.io/github/license/SFXShannon/pimax-game-manager)](LICENSE)
 
-A Windows tool for managing your **Pimax Play** library: set custom cover images (including for games added with **Import**), arrange the library in any order, edit per-game settings for many games at once, and back it all up so a Pimax update can't wipe your changes.
+A Windows tool for managing your **Pimax Play** library: add games (one at a time or a whole folder), set custom cover images, arrange the library in any order, edit per-game settings for many games at once, and back it all up so a Pimax update can't wipe your changes.
 
 *Formerly Pimax Cover Changer.*
 
-![Pimax Game Manager](screenshots/main-window-v1.6.0.png)
+![Pimax Game Manager](screenshots/main-window-v1.7.0.png)
 
 ## Download
 
@@ -22,15 +22,40 @@ Windows SmartScreen or Defender may warn about it as an unrecognized app. If you
 
 ## First-launch tour
 
-The first time you open the app, a short tour walks through images, library order, game settings and backups. Use **Next** / **Back** (or the arrow keys) to step through it.
+The first time you open the app, a short tour walks through images, adding games, library order, game settings and backups. Use **Next** / **Back** (or the arrow keys) to step through it.
 
 ![Tour](screenshots/tutorial-v1.6.0.png)
 
 Tick **Don't show this at startup** to stop it opening each time. You can open it again whenever you like with **Tutorial** at the bottom of the main window.
 
+## Add games
+
+**Add games...** puts games into your Pimax Play library without using Pimax's **Import** button. It creates exactly the same kind of entry Import does, so Pimax treats them as imported games.
+
+![Add games](screenshots/add-games-v1.7.0.png)
+
+- **Add .exe or shortcut...** picks one or more game .exe files or shortcuts (.lnk), for example a mod's launcher shortcut.
+- **Scan a folder...** finds the main .exe of every game in a folder: a Steam library (such as `D:\SteamLibrary`), a folder of games, or one game's own folder. It skips uninstallers, crash reporters, servers, redistributables and the like.
+- Each row shows the name Pimax will display (edit it if you like) and the program Pimax will start. If the scan picked the wrong .exe, choose another from the dropdown.
+- Games already in your library are unticked and marked **Already in your library**, so nothing is added twice.
+- **Find a cover image for each game automatically** uses Steam's banner for games in a Steam library, otherwise an exact Steam store match, otherwise SteamGridDB (with a key). Games without a match can be given an image afterwards with **Find image**.
+- **Add games** adds everything ticked and restarts Pimax Play once.
+
+SteamVR games already show up in Pimax by themselves. Adding one here as well gives you a second entry that you *can* give your own image.
+
+### Edit or remove an imported game
+
+Pick an imported game and click **Edit / remove...** to:
+
+- **Rename** it.
+- **Change the program** it starts, for example to point it at a mod's .exe or launcher.
+- **Remove from library**. The game itself isn't touched; only its Pimax Play entry is removed, and it's taken off your pinned list. The entry is kept in `%APPDATA%\PimaxGameManager\backups\removed-games`. Edits keep a copy of the old entry in `backups\edited-games`.
+
+Steam and Oculus entries can't be edited or removed here, because Pimax rebuilds them from those stores.
+
 ## Library images
 
-Custom images work for games added to Pimax Play with **Import**. For SteamVR and Oculus games, Pimax copies the image from Steam or Oculus every time it starts, so any change is overwritten within seconds; the app shows the current image but won't let you change it. To give a Steam or Oculus game your own image, add it with **Import** in Pimax Play.
+Custom images work for imported games (added with **Add games** or Pimax's **Import**). For SteamVR and Oculus games, Pimax copies the image from Steam or Oculus every time it starts, so any change is overwritten within seconds; the app shows the current image but won't let you change it. To give a Steam or Oculus game your own image, add its .exe with **Add games** and give that entry an image.
 
 1. Pick an imported game from your Pimax library on the left.
 2. Click **Find image** to search for art automatically, or paste an image link, or click **Browse...** for an image file.
@@ -56,7 +81,7 @@ If the automatic match is wrong, type a different name in the search box and cli
 
 Pimax Play normally lists Steam games by Steam app ID, then Oculus games, then imported games in the order you added them. The only order it lets you set is for **pinned** games, which always come first. **Library order...** uses that to let you arrange the whole library:
 
-![Library order](screenshots/library-order-v1.6.0.png)
+![Library order](screenshots/library-order-v1.7.0.png)
 
 - Tick games to pin them, and drag them into the order you want. While dragging, a label shows which game you're moving and a blue line shows where it will land; hold near the top or bottom edge of the list to scroll. **Move up / Move down** and **Move to top / Move to bottom** move the selected game without dragging.
 - **Pin all** then drag to control the entire list. **Sort A-Z** sorts alphabetically.
@@ -122,6 +147,7 @@ Pimax Play keeps each library entry as a JSON file in `%APPDATA%\Pimax\manifest`
 
 - copies the chosen image to `%APPDATA%\PimaxGameManager\covers` so it keeps working offline, if the original moves, and if Pimax clears its own folder,
 - backs up the original entry to `%APPDATA%\PimaxGameManager\backups` the first time you change it,
+- adds games by writing a new entry file of the same form Pimax's Import makes (`"source":"pimax_import"`, a random `local.xxxxxxxx` ID, the game's name and the .exe or shortcut to start), and checks the .exe path so a game isn't added twice,
 - writes files back as UTF-8 **without a BOM** (Pimax silently drops entries saved with one),
 - restarts Pimax: it stops Pimax Play, the `PiServiceLauncher` service and `PiPlayService.exe` (which holds the library and settings in memory and survives a plain service restart), then starts them again. Game settings are written while Pimax is stopped so it can't overwrite them.
 
@@ -140,13 +166,13 @@ powershell -ExecutionPolicy Bypass -File .\PimaxGameManager.ps1
 
 ```powershell
 Install-Module ps2exe -Scope CurrentUser
-Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.6.0
+Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.7.0
 ```
 
 To build the installer too, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
-& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.6.0 .\PimaxGameManager.iss
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.7.0 .\PimaxGameManager.iss
 ```
 
 The app icon and `assets/logo.png` are generated from the logo shapes used in the app:

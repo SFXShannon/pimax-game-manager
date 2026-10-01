@@ -36,7 +36,7 @@ try {
     if ((Test-Path $legacyCfg) -and -not (Test-Path $newCfg)) { Copy-Item $legacyCfg $newCfg }
 } catch { }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
-$AppVersion = '1.6.0'
+$AppVersion = '1.7.0'
 $RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-game-manager/releases/latest'
 
 # ---------- Library ----------
@@ -124,7 +124,12 @@ function Restore-Cover($game) {
     if (-not (Test-Path $backup)) { throw 'No backup for this game - it still has its original image.' }
     Get-Process PimaxClient -ErrorAction SilentlyContinue | Stop-Process -Force
     Start-Sleep -Seconds 2
-    Copy-Item $backup $game.File -Force
+    # Put back only the image, so a rename or a new .exe made with Edit game is kept
+    $orig = [IO.File]::ReadAllText($backup).TrimStart([char]0xFEFF) | ConvertFrom-Json
+    $j = [IO.File]::ReadAllText($game.File).TrimStart([char]0xFEFF) | ConvertFrom-Json
+    $icon = if ($orig.PSObject.Properties.Name -contains 'icon') { $orig.icon } else { '' }
+    if ($j.PSObject.Properties.Name -contains 'icon') { $j.icon = $icon } else { $j | Add-Member -NotePropertyName icon -NotePropertyValue $icon }
+    [IO.File]::WriteAllText($game.File, ($j | ConvertTo-Json -Compress -Depth 10), $Utf8NoBom)
     Remove-Item $backup -Force
 }
 
@@ -145,8 +150,19 @@ function Set-SgdbKey([string]$key) { Set-AppSetting 'sgdbKey' $key }
 function Resolve-SteamAppId($game) {
     $j = [IO.File]::ReadAllText($game.File).TrimStart([char]0xFEFF) | ConvertFrom-Json
     if ([string]$j.id -match '^steam\.app\.(\d+)$') { return $Matches[1] }
-    $route = [string]$j.route
-    if ($route -match '^steam://\w+/(\d+)') { return $Matches[1] }
+    return (Resolve-SteamAppIdFromRoute ([string]$j.route))
+}
+
+# Steam app ID for an .exe or shortcut inside a Steam library (from Steam's appmanifest files)
+function Resolve-SteamAppIdFromRoute([string]$route) {
+    $info = Get-SteamInfoFromRoute $route
+    if ($info) { return $info.AppId }
+    return $null
+}
+
+function Get-SteamInfoFromRoute([string]$route) {
+    if (-not $route) { return $null }
+    if ($route -match '^steam://\w+/(\d+)') { return [pscustomobject]@{ AppId = $Matches[1]; Name = $null } }
     if ($route -like '*.lnk' -and (Test-Path -LiteralPath $route)) {
         try { $route = (New-Object -ComObject WScript.Shell).CreateShortcut($route).TargetPath } catch { }
     }
@@ -155,7 +171,8 @@ function Resolve-SteamAppId($game) {
         foreach ($acf in Get-ChildItem -LiteralPath $apps -Filter 'appmanifest_*.acf' -ErrorAction SilentlyContinue) {
             $txt = [IO.File]::ReadAllText($acf.FullName)
             if ($txt -match '"installdir"\s+"([^"]+)"' -and $Matches[1] -ieq $folder) {
-                if ($txt -match '"appid"\s+"(\d+)"') { return $Matches[1] }
+                $name = if ($txt -match '"name"\s+"([^"]+)"') { ($Matches[1] -replace '[\u2122\u00AE\u00A9]', '').Trim() } else { $null }
+                if ($txt -match '"appid"\s+"(\d+)"') { return [pscustomobject]@{ AppId = $Matches[1]; Name = $name } }
             }
         }
     }
@@ -210,6 +227,176 @@ function Find-Art($game, [string]$term, [bool]$exact) {
     }
     if (-not $hasKey) { $notes += 'Add a SteamGridDB key for many more choices.' }
     [pscustomobject]@{ Items = $items; Note = ($notes -join ' ') }
+}
+
+# ---------- Adding, editing and removing imported games ----------
+# An imported game is one small file in Pimax's manifest folder, the same as Pimax's own Import makes:
+# {"create_time":0,"icon":"","id":"local.xxxxxxxx","name":"...","play_time":0,"route":"<exe or shortcut>","source":"pimax_import","version":""}
+$GameExeSkip = '^(unins\d*|uninstall.*|setup.*|.*installer.*|vc_?redist.*|vcredist.*|dxsetup|dotnet.*|ndp\d+.*|oalinst|physx.*|.*crash.*|.*report.*|.*helper.*|.*updater?|.*launcherpatcher.*|easyanticheat.*|eac.*setup.*|be(service|launcher).*|.*_be|unitycrashhandler.*|cefsharp.*|.*webhelper.*|zfgamebrowser|.*-cmd|.*server.*|hlds|hltv|srcds|vconsole.*|.*benchmark.*|.*editor.*|.*crs-.*)$'
+
+function Get-RouteKey([string]$route) {
+    if (-not $route) { return '' }
+    try { return [IO.Path]::GetFullPath($route.Trim('"', ' ')).ToLower() } catch { return $route.Trim('"', ' ').ToLower() }
+}
+
+# Map of route -> game for everything already in the library (so the same game isn't added twice)
+function Get-LibraryRoutes {
+    $map = @{}
+    foreach ($g in Get-PimaxGames) { $r = Get-Route $g; if ($r) { $map[(Get-RouteKey $r)] = $g } }
+    return $map
+}
+
+function New-ImportId {
+    $taken = @{}; foreach ($f in Get-ChildItem $ManifestDir -Filter *.json -ErrorAction SilentlyContinue) { $taken[$f.BaseName] = $true }
+    do { $id = 'local.' + (-join (1..8 | ForEach-Object { '0123456789abcdef'[(Get-Random -Maximum 16)] })) } while ($taken.ContainsKey($id))
+    return $id
+}
+
+# A sensible display name for an .exe or shortcut
+function Get-GameNameFromPath([string]$path) {
+    $steam = Get-SteamInfoFromRoute $path
+    if ($steam -and $steam.Name) { return $steam.Name }
+    if ($path -like '*.lnk') { return [IO.Path]::GetFileNameWithoutExtension($path) }
+    try {
+        $vi = [Diagnostics.FileVersionInfo]::GetVersionInfo($path)
+        foreach ($n in $vi.ProductName, $vi.FileDescription) {
+            $n = ([string]$n).Trim()
+            if ($n -and $n -notmatch '^(Unreal Engine|Unity|UnrealGame|Game|Launcher|Microsoft|Windows)\b' -and $n.Length -le 60) { return $n }
+        }
+    } catch { }
+    return ([IO.Path]::GetFileNameWithoutExtension($path) -replace '-Win64-Shipping$|-Shipping$', '')
+}
+
+# Finds the main .exe of each game under a folder: a Steam library, a games folder, or one game's folder
+function Find-GameExes([string]$folder) {
+    $folder = $folder.TrimEnd('\')
+    $common = Join-Path $folder 'steamapps\common'
+    $roots = if (Test-Path -LiteralPath $common) { @(Get-ChildItem -LiteralPath $common -Directory -ErrorAction SilentlyContinue) }
+             elseif (@(Get-ChildItem -LiteralPath $folder -Filter *.exe -File -ErrorAction SilentlyContinue).Count) { @(Get-Item -LiteralPath $folder) }
+             else { @(Get-ChildItem -LiteralPath $folder -Directory -ErrorAction SilentlyContinue) }
+    foreach ($root in $roots) {
+        if ($root.Name -match '^(Steamworks Shared|SteamVR|Steam Controller Configs|_CommonRedist|CommonRedist|Redist|DirectX)$') { continue }
+        $exes = @(Get-ChildItem -LiteralPath $root.FullName -Filter *.exe -File -Recurse -Depth 4 -ErrorAction SilentlyContinue |
+                  Where-Object { $_.BaseName -notmatch $GameExeSkip -and $_.FullName -notmatch '\\(_?CommonRedist|Redist|redistributables?|DirectX|Support|Installers?|Engine\\Binaries\\ThirdParty|__Installer)\\' -and $_.Length -gt 30KB })
+        if (-not $exes.Count) { continue }
+        $key = ($root.Name -replace '[^a-z0-9]', '').ToLower()
+        # Prefer an exe named like its folder, then the shallowest, then the largest
+        $best = $exes | Sort-Object @{ Expression = { $b = ($_.BaseName -replace '[^a-z0-9]', '').ToLower(); if ($key -and ($b -eq $key -or ($key.Length -ge 4 -and $b.Length -ge 3 -and ($b.StartsWith($key) -or $key.StartsWith($b))))) { 0 } else { 1 } } },
+                                    @{ Expression = { ($_.FullName.Substring($root.FullName.Length) -split '\\').Count } },
+                                    @{ Expression = { $_.Length }; Descending = $true } | Select-Object -First 1
+        # Name: Steam's own name if it's a Steam game, else the game's folder name, else from the exe
+        $steam = Get-SteamInfoFromRoute $best.FullName
+        $name = if ($steam -and $steam.Name) { $steam.Name } elseif ($root.FullName -ne $folder) { $root.Name } else { Get-GameNameFromPath $best.FullName }
+        [pscustomobject]@{ Name = $name; Route = $best.FullName; Others = @($exes | Where-Object { $_.FullName -ne $best.FullName } | ForEach-Object FullName) }
+    }
+}
+
+# Picks a cover automatically: Steam's banner when the game is in a Steam library, otherwise an exact Steam
+# store name match, otherwise the first SteamGridDB result (with a key). Returns an image URL or $null.
+function Find-AutoCover([string]$name, [string]$route) {
+    $appId = Resolve-SteamAppIdFromRoute $route
+    if ($appId) { return (Get-SteamArt $appId $name | Select-Object -First 1).Url }
+    $norm = { param($s) ([string]$s -replace '[^a-z0-9]', '').ToLower() }
+    try {
+        $hit = @(Search-SteamStore $name) | Where-Object { (& $norm $_.name) -eq (& $norm $name) } | Select-Object -First 1
+        if ($hit) { return (Get-SteamArt ([string]$hit.id) $hit.name | Select-Object -First 1).Url }
+    } catch { }
+    if (Get-SgdbKey) {
+        try {
+            $g = @((Invoke-Sgdb ("search/autocomplete/{0}" -f [uri]::EscapeDataString($name))).data) | Select-Object -First 1
+            if ($g) { $a = Get-SgdbGrids 'game' ([string]$g.id) $g.name 1 | Select-Object -First 1; if ($a) { return $a.Url } }
+        } catch { }
+    }
+    return $null
+}
+
+# Saves an image (link or file) into the app's covers folder and returns the local path
+function Save-CoverFile([string]$id, [string]$source) {
+    $ext = [IO.Path]::GetExtension(($source -split '\?')[0]).ToLower()
+    if ($ext -notin '.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif') { $ext = '.jpg' }
+    $dest = Join-Path $CoverDir ("{0}_{1}{2}" -f $id, (Get-Date -Format 'yyyyMMddHHmmss'), $ext)
+    if ($source -match '^https?://') { (New-Object Net.WebClient).DownloadFile($source, $dest) }
+    else { Copy-Item -LiteralPath $source -Destination $dest -Force }
+    try { Load-Bitmap $dest | Out-Null } catch { Remove-Item $dest -Force -ErrorAction SilentlyContinue; throw "That file isn't a readable image." }
+    return $dest
+}
+
+function Write-Manifest([string]$path, $obj) {
+    $text = $obj | ConvertTo-Json -Compress -Depth 10
+    $null = $text | ConvertFrom-Json   # validate before writing
+    [IO.File]::WriteAllText($path, $text, $Utf8NoBom)
+}
+
+# Adds games to the Pimax library. Each entry: Name, Route, and optionally Image (a link or file).
+# Images are fetched first; the manifests are written while Pimax is stopped. Returns a report.
+function Add-ImportedGames($entries) {
+    $have = Get-LibraryRoutes
+    $report = [ordered]@{ Added = @(); Skipped = @(); ImageFailed = @(); ServiceOk = $true }
+    $todo = @()
+    foreach ($e in $entries) {
+        $name = ([string]$e.Name).Trim(); $route = ([string]$e.Route).Trim('"', ' ')
+        if (-not $name -or -not $route) { $report.Skipped += "$name (missing name or path)"; continue }
+        if (-not (Test-Path -LiteralPath $route)) { $report.Skipped += "$name (file not found)"; continue }
+        $k = Get-RouteKey $route
+        if ($have.ContainsKey($k)) { $report.Skipped += "$name (already in your library as $($have[$k].Name))"; continue }
+        $have[$k] = $true
+        $id = New-ImportId
+        while ($todo | Where-Object { $_.id -eq $id }) { $id = New-ImportId }
+        $icon = ''
+        if ($e.Image) { try { $icon = Save-CoverFile $id ([string]$e.Image) } catch { $report.ImageFailed += $name } }
+        $todo += [pscustomobject][ordered]@{ create_time = 0; icon = $icon; id = $id; name = $name; play_time = 0; route = $route; source = 'pimax_import'; version = '' }
+    }
+    if ($todo.Count) {
+        $report.ServiceOk = Invoke-WhilePimaxStopped {
+            if (-not (Test-Path $ManifestDir)) { New-Item -ItemType Directory -Path $ManifestDir -Force | Out-Null }
+            foreach ($m in $todo) { Write-Manifest (Join-Path $ManifestDir "$($m.id).json") $m }
+        }
+        $report.Added = @($todo | ForEach-Object { [pscustomobject]@{ Id = $_.id; Name = $_.name; HasImage = [bool]$_.icon } })
+    }
+    return [pscustomobject]$report
+}
+
+# Renames an imported game or points it at a different .exe / shortcut
+function Set-ImportedGame($game, [string]$name, [string]$route) {
+    if ($game.Source -ne 'Imported') { throw 'Only imported games can be edited here; Pimax rebuilds Steam and Oculus entries itself.' }
+    $name = $name.Trim(); $route = $route.Trim('"', ' ')
+    if (-not $name) { throw 'The name is empty.' }
+    if (-not (Test-Path -LiteralPath $route)) { throw "File not found: $route" }
+    $k = Get-RouteKey $route
+    $other = (Get-LibraryRoutes)[$k]
+    if ($other -and $other.File -ne $game.File) { throw "That file is already in your library as $($other.Name)." }
+    $dir = Join-Path $BackupDir 'edited-games'
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    Copy-Item -LiteralPath $game.File (Join-Path $dir ("{0}_{1}" -f (Get-Date -Format 'yyyyMMddHHmmss'), [IO.Path]::GetFileName($game.File)))
+    Invoke-WhilePimaxStopped {
+        $j = [IO.File]::ReadAllText($game.File).TrimStart([char]0xFEFF) | ConvertFrom-Json
+        $j.name = $name
+        if ($j.PSObject.Properties.Name -contains 'route') { $j.route = $route } else { $j | Add-Member -NotePropertyName route -NotePropertyValue $route }
+        Write-Manifest $game.File $j
+    }
+}
+
+# Removes imported games from the library. Their entry files are moved to the app's backups folder (not deleted),
+# and they are taken off the pinned list. Per-game settings are left for "Remove leftover settings".
+function Remove-ImportedGames($games) {
+    $games = @($games | Where-Object { $_.Source -eq 'Imported' })
+    if (-not $games.Count) { return [pscustomobject]@{ Removed = 0; ServiceOk = $true } }
+    $dest = Join-Path $BackupDir 'removed-games'
+    $ids = @($games | ForEach-Object { Get-GameId $_ })
+    $ok = Invoke-WhilePimaxStopped {
+        if (-not (Test-Path $dest)) { New-Item -ItemType Directory -Path $dest -Force | Out-Null }
+        foreach ($g in $games) {
+            $to = Join-Path $dest ("{0}_{1}" -f (Get-Date -Format 'yyyyMMddHHmmss'), [IO.Path]::GetFileName($g.File))
+            Move-Item -LiteralPath $g.File -Destination $to -Force
+        }
+        if (Test-Path $ClientConfig) {
+            $text = [IO.File]::ReadAllText($ClientConfig)
+            $pins = @(Get-PinnedIds $text)
+            $keep = @($pins | Where-Object { $ids -notcontains $_ })
+            if ($keep.Count -ne $pins.Count) { [IO.File]::WriteAllText($ClientConfig, (Set-PinnedIdsInText $text $keep), $Utf8NoBom) }
+        }
+    }
+    return [pscustomobject]@{ Removed = $games.Count; ServiceOk = $ok }
 }
 
 # ---------- Library order (Pimax "pin to top" list) ----------
@@ -642,6 +829,8 @@ $ThemeXaml = @'
     <Geometry x:Key="IcoImage">M4 5 H20 C20.6 5 21 5.4 21 6 V18 C21 18.6 20.6 19 20 19 H4 C3.4 19 3 18.6 3 18 V6 C3 5.4 3.4 5 4 5 Z M3 15.5 L8.5 10.5 L13.5 15 L16.5 12.5 L21 16.5 M15.5 7.5 a1.5 1.5 0 1 1 0 3 a1.5 1.5 0 1 1 0 -3 Z</Geometry>
     <Geometry x:Key="IcoArrowRight">M5 12 H19 M13 6 L19 12 L13 18</Geometry>
     <Geometry x:Key="IcoArrowLeft">M19 12 H5 M11 6 L5 12 L11 18</Geometry>
+    <Geometry x:Key="IcoPlus">M12 5 V19 M5 12 H19</Geometry>
+    <Geometry x:Key="IcoEdit">M4 20 H8.5 L19.5 9 C20.3 8.2 20.3 6.8 19.5 6 L18 4.5 C17.2 3.7 15.8 3.7 15 4.5 L4 15.5 Z M13.5 6 L18 10.5</Geometry>
     <Style TargetType="ToolTip">
       <Setter Property="Background" Value="#1B1F28"/><Setter Property="Foreground" Value="#E8EBF2"/>
       <Setter Property="BorderBrush" Value="#2E3542"/><Setter Property="Padding" Value="9,6"/>
@@ -726,7 +915,7 @@ $ThemeXaml = @'
           <ControlTemplate TargetType="CheckBox">
             <Grid Background="Transparent">
               <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-              <Border x:Name="Box" Width="17" Height="17" CornerRadius="4" BorderThickness="1.5" BorderBrush="#434B5C" Background="#161A21" VerticalAlignment="Center">
+              <Border x:Name="Box" Width="18" Height="18" CornerRadius="4" BorderThickness="1.6" BorderBrush="#7A849A" Background="#1E2430" VerticalAlignment="Center">
                 <Path x:Name="Mark" Data="M3 7.5 L6 10.5 L11 4.5" Stroke="#FFFFFF" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Visibility="Collapsed"/>
               </Border>
               <ContentPresenter x:Name="Cp" Grid.Column="1" Margin="8,0,0,0" VerticalAlignment="Center" RecognizesAccessKey="True"/>
@@ -911,7 +1100,7 @@ $ThemeXaml = @'
         <Image Source="{StaticResource LogoImage}" Height="34" Margin="0,0,14,0" VerticalAlignment="Center"/>
         <StackPanel VerticalAlignment="Center">
           <TextBlock FontSize="21" FontWeight="SemiBold"><Run Text="Pimax"/><Run Text=" Game Manager" Foreground="{StaticResource LogoGrad}"/></TextBlock>
-          <TextBlock Text="Library images  &#183;  library order  &#183;  game settings  &#183;  backups" Foreground="#8B93A5" FontSize="12" Margin="1,1,0,0"/>
+          <TextBlock Text="Add games  &#183;  library images  &#183;  library order  &#183;  game settings  &#183;  backups" Foreground="#8B93A5" FontSize="12" Margin="1,1,0,0"/>
         </StackPanel>
       </DockPanel>
       <Border Grid.Row="1" Height="1" Margin="0,14,0,0" Background="{StaticResource LineGrad}"/>
@@ -946,13 +1135,17 @@ $ThemeXaml = @'
         </DockPanel>
         <Grid DockPanel.Dock="Bottom" Margin="0,10,0,0">
           <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="8"/><ColumnDefinition/></Grid.ColumnDefinitions>
-          <Grid.RowDefinitions><RowDefinition/><RowDefinition Height="8"/><RowDefinition/></Grid.RowDefinitions>
-          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoList}" x:Name="OrderBtn" Grid.Column="0" Content="Library order..."
+          <Grid.RowDefinitions><RowDefinition/><RowDefinition Height="8"/><RowDefinition/><RowDefinition Height="8"/><RowDefinition/></Grid.RowDefinitions>
+          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoPlus}" x:Name="AddBtn" Grid.Row="0" Grid.Column="0" Content="Add games..."
+                  Padding="8,8" Background="#0F2A33" BorderBrush="#1E6A7A" ToolTip="Add games to Pimax Play: pick .exe files or shortcuts, or scan a folder"/>
+          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoEdit}" x:Name="EditBtn" Grid.Row="0" Grid.Column="2" Content="Edit / remove..."
+                  Padding="8,8" ToolTip="Rename the selected imported game, change its .exe, or remove it from Pimax Play"/>
+          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoList}" x:Name="OrderBtn" Grid.Row="2" Grid.Column="0" Content="Library order..."
                   Padding="8,8" Background="#1B2A4A" BorderBrush="#2F4F8F"/>
-          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoSliders}" x:Name="SettingsBtn" Grid.Column="2" Content="Game settings..."
+          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoSliders}" x:Name="SettingsBtn" Grid.Row="2" Grid.Column="2" Content="Game settings..."
                   Padding="8,8" Background="#1B2A4A" BorderBrush="#2F4F8F"/>
-          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoRefresh}" x:Name="RefreshBtn" Grid.Row="2" Grid.Column="0" Content="Refresh list" Padding="8,8"/>
-          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoArchive}" x:Name="BackupBtn" Grid.Row="2" Grid.Column="2" Content="Backup &amp; restore..." Padding="8,8"/>
+          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoRefresh}" x:Name="RefreshBtn" Grid.Row="4" Grid.Column="0" Content="Refresh list" Padding="8,8"/>
+          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoArchive}" x:Name="BackupBtn" Grid.Row="4" Grid.Column="2" Content="Backup &amp; restore..." Padding="8,8"/>
         </Grid>
         <ListBox x:Name="GameList" Background="Transparent" BorderThickness="0" Padding="0"/>
       </DockPanel>
@@ -1004,7 +1197,7 @@ $ThemeXaml = @'
 '@).Replace('__THEME__', $ThemeXaml)
 $window = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $xaml))
 $ui = @{}
-foreach ($n in 'GameList','RefreshBtn','OrderBtn','SettingsBtn','GameTitle','GameInfo','SourceBox','BrowseBtn','PreviewBtn','FindBtn','KeyBtn','ApplyBtn','RestoreBtn','RestartBtn','PreviewImg','NoImage','Status','UpdateBar','UpdateText','UpdateBtn','UpdateClose','VersionLabel','ReportLink','TutorialLink','LibCount','BackupBtn','ResetBar','ResetText','ResetRestore','ResetDismiss') { $ui[$n] = $window.FindName($n) }
+foreach ($n in 'GameList','AddBtn','EditBtn','RefreshBtn','OrderBtn','SettingsBtn','GameTitle','GameInfo','SourceBox','BrowseBtn','PreviewBtn','FindBtn','KeyBtn','ApplyBtn','RestoreBtn','RestartBtn','PreviewImg','NoImage','Status','UpdateBar','UpdateText','UpdateBtn','UpdateClose','VersionLabel','ReportLink','TutorialLink','LibCount','BackupBtn','ResetBar','ResetText','ResetRestore','ResetDismiss') { $ui[$n] = $window.FindName($n) }
 $window.Title = "Pimax Game Manager $AppVersion"
 $window.Add_SourceInitialized({ Set-DarkTitleBar $this })
 
@@ -1041,6 +1234,7 @@ function Selected-Game { if ($ui.GameList.SelectedItem) { $ui.GameList.SelectedI
 
 function Fill-List {
     $keep = (Selected-Game).File
+    if ($script:SelectAfterFill) { $keep = $script:SelectAfterFill; $script:SelectAfterFill = $null }
     $ui.GameList.Items.Clear()
     foreach ($g in Get-PimaxGames) {
         $item = New-Object Windows.Controls.ListBoxItem
@@ -1068,10 +1262,11 @@ $ui.GameList.Add_SelectionChanged({
     $ui.GameTitle.Text = $g.Name
     $canChange = ($g.Source -eq 'Imported')
     $info = "Source: $($g.Source)"
-    if (-not $canChange) { $info += "   -  Pimax takes this game's image from $(if ($g.Source -eq 'Oculus') { 'Oculus' } else { 'Steam' }) every time it starts, so it can't be changed here. To use your own image, add the game with Import in Pimax Play." }
+    if ($canChange) { $r = Get-Route $g; if ($r) { $info += "   -  $r" } }
+    if (-not $canChange) { $info += "   -  Pimax takes this game's image from $(if ($g.Source -eq 'Oculus') { 'Oculus' } else { 'Steam' }) every time it starts, so it can't be changed here. To use your own image, add the game's .exe with Add games... and give that entry an image." }
     $ui.GameInfo.Text = $info
     $ui.SourceBox.Text = ''
-    foreach ($b in $ui.ApplyBtn, $ui.FindBtn, $ui.BrowseBtn, $ui.PreviewBtn, $ui.SourceBox) { $b.IsEnabled = $canChange }
+    foreach ($b in $ui.ApplyBtn, $ui.FindBtn, $ui.BrowseBtn, $ui.PreviewBtn, $ui.SourceBox, $ui.EditBtn) { $b.IsEnabled = $canChange }
     $ui.RestoreBtn.IsEnabled = $canChange
     try { Show-Preview $g.Icon; Set-Status $(if ($canChange) { 'Showing the current image.' } else { 'Images can only be changed for imported games.' }) } catch { Set-Status 'Current image could not be loaded.' $true }
 })
@@ -1272,7 +1467,7 @@ function Show-Order {
     }
     foreach ($g in $ordered) {
         $cb = New-Object Windows.Controls.CheckBox
-        $cb.IsChecked = ($pinned -contains $g.Id); $cb.VerticalAlignment = 'Center'; $cb.Margin = '0,0,10,0'
+        $cb.IsChecked = ($pinned -contains $g.Id); $cb.VerticalAlignment = 'Center'; $cb.Margin = '0,0,10,0'; $cb.ToolTip = 'Tick to pin this game (pinned games show first, in this order)'
         $cb.Add_Click({ & $script:updateCount })
         $name = New-Object Windows.Controls.TextBlock
         $name.Text = $g.Name; $name.VerticalAlignment = 'Center'
@@ -1820,6 +2015,239 @@ $ui.SettingsBtn.Add_Click({
     try { Show-GameSettings $id } catch { Set-Status "Game settings failed: $($_.Exception.Message)" $true }
 })
 
+# ---------- Add games window ----------
+function Show-AddGames {
+    $script:aw = New-DarkWindow 'Add games' 1000 680 @'
+  <DockPanel Margin="16">
+    <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="#B4BCCC" Margin="0,0,0,12"
+      Text="Add games to your Pimax Play library, the same way Import in Pimax Play does. Pick .exe files or shortcuts, or scan a folder (a Steam library, a folder of games, or one game's folder). Check the name and the .exe for each game, untick any you don't want, then click Add."/>
+    <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+      <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoPlus}" x:Name="APick" Content="Add .exe or shortcut..." Margin="0,0,8,0"
+              Background="#2F6BFF" BorderBrush="#5B8CFF" FontWeight="SemiBold"/>
+      <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoFolder}" x:Name="AScan" Content="Scan a folder..." Margin="0,0,18,0"/>
+      <Button x:Name="AAll" Content="Select all" Margin="0,0,6,0"/>
+      <Button x:Name="ANone" Content="Select none" Margin="0,0,6,0"/>
+      <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoClose}" x:Name="AClear" Content="Clear list"/>
+    </WrapPanel>
+    <TextBlock x:Name="AStatus" DockPanel.Dock="Bottom" Margin="0,10,0,0" Foreground="#4ADE80" TextWrapping="Wrap"/>
+    <DockPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
+      <Button x:Name="ACancel" DockPanel.Dock="Right" Content="Cancel" Margin="8,0,0,0"/>
+      <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoCheck}" x:Name="AAdd" DockPanel.Dock="Right" Content="Add games"
+              Background="#16A34A" BorderBrush="#22C55E" FontWeight="SemiBold"/>
+      <CheckBox x:Name="AImages" IsChecked="True" VerticalAlignment="Center"
+                Content="Find a cover image for each game automatically (Steam, or SteamGridDB with a key)"/>
+    </DockPanel>
+    <Grid>
+      <TextBlock x:Name="AEmpty" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#4B5263" TextAlignment="Center"
+                 Text="No games yet.&#x0a;Click Add .exe or shortcut... or Scan a folder... to start."/>
+      <ListBox x:Name="AList"/>
+    </Grid>
+  </DockPanel>
+'@
+    $script:aList = $script:aw.FindName('AList'); $script:aStatus = $script:aw.FindName('AStatus'); $script:aAddBtn = $script:aw.FindName('AAdd')
+    $script:aEmpty = $script:aw.FindName('AEmpty'); $script:aImages = $script:aw.FindName('AImages')
+    $script:aRows = New-Object Collections.ArrayList
+    $script:aHave = Get-LibraryRoutes
+    $script:addResult = $null
+    $script:aSay = { param([string]$m, [bool]$bad = $false) $script:aStatus.Foreground = $(if ($bad) { '#F87171' } else { '#4ADE80' }); $script:aStatus.Text = $m }
+
+    # Marks a row that is already in the library, and keeps the Add button's count up to date
+    $script:aCheckRow = {
+        param($row)
+        $route = [string]$row.Exe.SelectedItem
+        $hit = if ($route) { $script:aHave[(Get-RouteKey $route)] } else { $null }
+        $row.InLibrary = [bool]$hit
+        if ($hit) {
+            $row.Note.Text = "Already in your library as $($hit.Name)"; $row.Note.Foreground = '#FBBF24'
+            $row.Check.IsChecked = $false; $row.Note.Visibility = 'Visible'
+        } else { $row.Note.Text = ''; $row.Note.Visibility = 'Collapsed' }
+    }
+    $script:aUpdate = {
+        $n = @($script:aRows | Where-Object { $_.Check.IsChecked }).Count
+        $script:aAddBtn.Content = $(if ($n -eq 1) { 'Add 1 game' } elseif ($n) { "Add $n games" } else { 'Add games' })
+        $script:aAddBtn.IsEnabled = ($n -gt 0)
+        $script:aEmpty.Visibility = $(if ($script:aRows.Count) { 'Collapsed' } else { 'Visible' })
+    }
+    $script:aAddRow = {
+        param([string]$name, [string]$route, [string[]]$others)
+        if ($script:aRows | Where-Object { (Get-RouteKey ([string]$_.Exe.SelectedItem)) -eq (Get-RouteKey $route) }) { return $false }
+        $row = [pscustomobject]@{ Check = $null; Name = $null; Exe = $null; Note = $null; InLibrary = $false }
+        $cb = New-Object Windows.Controls.CheckBox; $cb.IsChecked = $true; $cb.VerticalAlignment = 'Center'; $cb.Margin = '2,0,10,0'
+        $cb.Add_Click({ & $script:aUpdate })
+        $nb = New-Object Windows.Controls.TextBox; $nb.Text = $name; $nb.Width = 260; $nb.Margin = '0,0,10,0'; $nb.ToolTip = 'Name shown in Pimax Play'
+        $ex = New-Object Windows.Controls.ComboBox; $ex.Margin = '0,0,0,0'
+        [void]$ex.Items.Add($route); foreach ($o in @($others)) { if ($o) { [void]$ex.Items.Add($o) } }
+        $ex.SelectedIndex = 0; $ex.ToolTip = $(if ($ex.Items.Count -gt 1) { 'The program Pimax starts. Pick another .exe here if this is the wrong one.' } else { 'The program Pimax starts' })
+        $ex.Tag = $row
+        $ex.Add_SelectionChanged({ & $script:aCheckRow $this.Tag; & $script:aUpdate })
+        $note = New-Object Windows.Controls.TextBlock; $note.FontSize = 11.5; $note.Margin = '0,3,0,0'
+        $top = New-Object Windows.Controls.DockPanel
+        [Windows.Controls.DockPanel]::SetDock($cb, 'Left'); [Windows.Controls.DockPanel]::SetDock($nb, 'Left')
+        foreach ($c in $cb, $nb, $ex) { [void]$top.Children.Add($c) }
+        $stack = New-Object Windows.Controls.StackPanel
+        [void]$stack.Children.Add($top); [void]$stack.Children.Add($note)
+        $note.Margin = '298,3,0,0'
+        $row.Check = $cb; $row.Name = $nb; $row.Exe = $ex; $row.Note = $note
+        $item = New-Object Windows.Controls.ListBoxItem; $item.Content = $stack; $item.Tag = $row; $item.Padding = '8,6'
+        [void]$script:aList.Items.Add($item); [void]$script:aRows.Add($row)
+        & $script:aCheckRow $row
+        return $true
+    }
+
+    $script:aw.FindName('APick').Add_Click({
+        $dlg = New-Object Windows.Forms.OpenFileDialog
+        $dlg.Filter = 'Games (*.exe, *.lnk)|*.exe;*.lnk|All files|*.*'; $dlg.Multiselect = $true; $dlg.DereferenceLinks = $false
+        $dlg.Title = 'Pick the game .exe files or shortcuts to add'
+        if ($dlg.ShowDialog() -ne 'OK') { return }
+        $n = 0; foreach ($f in $dlg.FileNames) { if (& $script:aAddRow (Get-GameNameFromPath $f) $f @()) { $n++ } }
+        & $script:aUpdate
+        & $script:aSay "Added $n file(s) to the list. Check the names, then click Add."
+    })
+    $script:aw.FindName('AScan').Add_Click({
+        $dlg = New-Object Windows.Forms.FolderBrowserDialog
+        $dlg.Description = 'Pick a folder to scan for games: a Steam library (for example D:\SteamLibrary), a folder of games, or one game''s folder.'
+        $dlg.ShowNewFolderButton = $false
+        if ($dlg.ShowDialog() -ne 'OK') { return }
+        & $script:aSay "Scanning $($dlg.SelectedPath)..."
+        $script:aw.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::Background)
+        try {
+            $found = @(Find-GameExes $dlg.SelectedPath)
+            $n = 0; foreach ($f in $found) { if (& $script:aAddRow $f.Name $f.Route $f.Others) { $n++ } }
+            & $script:aUpdate
+            $inLib = @($script:aRows | Where-Object { $_.InLibrary }).Count
+            & $script:aSay $(if ($found.Count) { "Found $($found.Count) game(s); $n new in this list. Already-imported games are unticked ($inLib). Steam VR games are already in Pimax as SteamVR; add one here only if you want to give it your own image." } else { 'No games found in that folder. Try the game''s own folder, or Add .exe or shortcut....' }) (-not $found.Count)
+        } catch { & $script:aSay "Couldn't scan that folder: $($_.Exception.Message)" $true }
+    })
+    $script:aw.FindName('AAll').Add_Click({ foreach ($r in $script:aRows) { if (-not $r.InLibrary) { $r.Check.IsChecked = $true } }; & $script:aUpdate })
+    $script:aw.FindName('ANone').Add_Click({ foreach ($r in $script:aRows) { $r.Check.IsChecked = $false }; & $script:aUpdate })
+    $script:aw.FindName('AClear').Add_Click({ $script:aList.Items.Clear(); $script:aRows.Clear(); & $script:aUpdate; & $script:aSay '' })
+    $script:aw.FindName('ACancel').Add_Click({ $script:aw.Close() })
+    $script:aAddBtn.Add_Click({
+        $rows = @($script:aRows | Where-Object { $_.Check.IsChecked })
+        if (-not $rows.Count) { & $script:aSay 'Tick at least one game.' $true; return }
+        $bad = $rows | Where-Object { -not $_.Name.Text.Trim() } | Select-Object -First 1
+        if ($bad) { & $script:aSay 'Every ticked game needs a name.' $true; $bad.Name.Focus(); return }
+        $entries = @(foreach ($r in $rows) { [pscustomobject]@{ Name = $r.Name.Text.Trim(); Route = [string]$r.Exe.SelectedItem; Image = $null } })
+        $script:aAddBtn.IsEnabled = $false
+        try {
+            if ($script:aImages.IsChecked) {
+                for ($i = 0; $i -lt $entries.Count; $i++) {
+                    & $script:aSay "Finding cover images ($($i + 1) of $($entries.Count)): $($entries[$i].Name)..."
+                    $script:aw.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::Background)
+                    try { $entries[$i].Image = Find-AutoCover $entries[$i].Name $entries[$i].Route } catch { }
+                }
+            }
+            & $script:aSay "Adding $($entries.Count) game(s) - restarting Pimax Play..."
+            $script:aw.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::Background)
+            $r = Add-ImportedGames $entries
+            Save-AutoSnapshot
+            $msg = "Added $($r.Added.Count) game(s) to Pimax Play"
+            $withImg = @($r.Added | Where-Object { $_.HasImage }).Count
+            if ($r.Added.Count) { $msg += " ($withImg with a cover image)" }
+            $msg += '.'
+            if ($r.Skipped.Count) { $msg += " Skipped: $($r.Skipped -join '; ')." }
+            if ($r.ImageFailed.Count) { $msg += " Couldn't download an image for: $($r.ImageFailed -join ', ')." }
+            if (-not $r.ServiceOk) { $msg += ' Could not restart the Pimax service; restart your PC if the games do not show up.' }
+            if ($r.Added.Count -and ($r.Added.Count - $withImg)) { $msg += ' Pick a game without an image and click Find image to give it one.' }
+            $script:addResult = [pscustomobject]@{ Message = $msg; Bad = (-not $r.ServiceOk -or -not $r.Added.Count); FirstId = $(if ($r.Added.Count) { $r.Added[0].Id } else { $null }) }
+            $script:aw.Close()
+        } catch {
+            & $script:aSay "Couldn't add the games: $($_.Exception.Message)" $true
+            $script:aAddBtn.IsEnabled = $true
+        }
+    })
+    & $script:aUpdate
+    if ($script:Capture -or $Test) { return $script:aw }
+    [void]$script:aw.ShowDialog()
+}
+
+$ui.AddBtn.Add_Click({
+    try { Show-AddGames } catch { Set-Status "Add games failed: $($_.Exception.Message)" $true; return }
+    if ($script:addResult) {
+        if ($script:addResult.FirstId) { $script:SelectAfterFill = Join-Path $ManifestDir "$($script:addResult.FirstId).json" }
+        Fill-List
+        Set-Status $script:addResult.Message $script:addResult.Bad
+    }
+})
+
+# ---------- Edit / remove an imported game ----------
+function Show-EditGame($game) {
+    $script:ew = New-DarkWindow 'Edit game' 720 290 @'
+  <DockPanel Margin="18">
+    <TextBlock x:Name="EInfo" DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="#B4BCCC" Margin="0,0,0,14"/>
+    <TextBlock x:Name="EStatus" DockPanel.Dock="Bottom" Margin="0,10,0,0" Foreground="#F87171" TextWrapping="Wrap"/>
+    <DockPanel DockPanel.Dock="Bottom" Margin="0,14,0,0">
+      <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoTrash}" x:Name="ERemove" DockPanel.Dock="Left" Content="Remove from library"
+              Background="#3A1518" BorderBrush="#7F1D1D"/>
+      <Button x:Name="ECancel" DockPanel.Dock="Right" Content="Cancel" Margin="8,0,0,0"/>
+      <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoCheck}" x:Name="ESave" DockPanel.Dock="Right" Content="Save and restart Pimax Play"
+              Background="#16A34A" BorderBrush="#22C55E" FontWeight="SemiBold"/>
+      <Border/>
+    </DockPanel>
+    <Grid>
+      <Grid.ColumnDefinitions><ColumnDefinition Width="80"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="10"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+      <TextBlock Text="Name" VerticalAlignment="Center"/>
+      <TextBox x:Name="EName" Grid.Column="1" Grid.ColumnSpan="2"/>
+      <TextBlock Text="Program" Grid.Row="2" VerticalAlignment="Center"/>
+      <TextBox x:Name="ERoute" Grid.Row="2" Grid.Column="1"/>
+      <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoFolder}" x:Name="EBrowse" Grid.Row="2" Grid.Column="2" Content="Browse..." Margin="8,0,0,0"/>
+    </Grid>
+  </DockPanel>
+'@
+    $script:eGame = $game
+    $script:editResult = $null
+    $script:ew.FindName('EInfo').Text = "Rename $($game.Name), or point it at a different .exe or shortcut (for example a mod's launcher). Removing it takes it out of Pimax Play only; the game itself isn't touched, and the library entry is kept in the app's backups folder."
+    $script:eName = $script:ew.FindName('EName'); $script:eRoute = $script:ew.FindName('ERoute'); $script:eStatus = $script:ew.FindName('EStatus')
+    $script:eName.Text = $game.Name; $script:eRoute.Text = Get-Route $game
+    $script:ew.FindName('ECancel').Add_Click({ $script:ew.Close() })
+    $script:ew.FindName('EBrowse').Add_Click({
+        $dlg = New-Object Windows.Forms.OpenFileDialog
+        $dlg.Filter = 'Games (*.exe, *.lnk)|*.exe;*.lnk|All files|*.*'; $dlg.DereferenceLinks = $false
+        try { $d = Split-Path $script:eRoute.Text; if (Test-Path -LiteralPath $d) { $dlg.InitialDirectory = $d } } catch { }
+        if ($dlg.ShowDialog() -eq 'OK') { $script:eRoute.Text = $dlg.FileName }
+    })
+    $script:ew.FindName('ESave').Add_Click({
+        $name = $script:eName.Text.Trim(); $route = $script:eRoute.Text.Trim('"', ' ')
+        if ($name -eq $script:eGame.Name -and $route -eq (Get-Route $script:eGame)) { $script:ew.Close(); return }
+        $script:eStatus.Foreground = '#4ADE80'; $script:eStatus.Text = 'Saving - restarting Pimax Play...'
+        $script:ew.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::Background)
+        try {
+            $ok = Set-ImportedGame $script:eGame $name $route
+            Save-AutoSnapshot
+            $script:editResult = [pscustomobject]@{ Message = "Saved $name." + $(if (-not $ok) { ' Could not restart the Pimax service; restart your PC if it does not update.' } else { '' }); Bad = (-not $ok); Keep = $script:eGame.File }
+            $script:ew.Close()
+        } catch { $script:eStatus.Foreground = '#F87171'; $script:eStatus.Text = $_.Exception.Message }
+    })
+    $script:ew.FindName('ERemove').Add_Click({
+        $a = [Windows.MessageBox]::Show("Remove $($script:eGame.Name) from your Pimax Play library?`n`nThe game itself isn't touched, and you can add it again any time with Add games.", 'Remove game', 'YesNo', 'Warning')
+        if ($a -ne 'Yes') { return }
+        $script:eStatus.Foreground = '#4ADE80'; $script:eStatus.Text = 'Removing - restarting Pimax Play...'
+        $script:ew.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::Background)
+        try {
+            $r = Remove-ImportedGames @($script:eGame)
+            Save-AutoSnapshot
+            $script:editResult = [pscustomobject]@{ Message = "Removed $($script:eGame.Name) from Pimax Play." + $(if (-not $r.ServiceOk) { ' Could not restart the Pimax service; restart your PC if it still shows.' } else { '' }); Bad = (-not $r.ServiceOk); Keep = $null }
+            $script:ew.Close()
+        } catch { $script:eStatus.Foreground = '#F87171'; $script:eStatus.Text = "Couldn't remove it: $($_.Exception.Message)" }
+    })
+    if ($script:Capture -or $Test) { return $script:ew }
+    [void]$script:ew.ShowDialog()
+}
+
+$ui.EditBtn.Add_Click({
+    $g = Selected-Game
+    if (-not $g -or $g.Source -ne 'Imported') { Set-Status 'Pick an imported game on the left first.' $true; return }
+    try { Show-EditGame $g } catch { Set-Status "Edit game failed: $($_.Exception.Message)" $true; return }
+    if ($script:editResult) {
+        if ($script:editResult.Keep) { $script:SelectAfterFill = $script:editResult.Keep }
+        Fill-List
+        if (-not $ui.GameList.SelectedItem) { $ui.GameTitle.Text = 'Pick a game on the left'; $ui.GameInfo.Text = ''; Show-Preview $null; $ui.EditBtn.IsEnabled = $false }
+        Set-Status $script:editResult.Message $script:editResult.Bad
+    }
+})
+$ui.EditBtn.IsEnabled = $false
+
 # ---------- Backup & restore window ----------
 function Format-SnapshotLine($s) {
     $when = ([datetime]$s.created).ToString('MMM d, yyyy  h:mm tt')
@@ -1949,7 +2377,9 @@ $TutorialSteps = @(
     @{ Icon = 'Logo'; Title = 'Welcome to Pimax Game Manager'
        Body = "Keep your Pimax Play library the way you want it: your own tile images, your own order, graphics settings for many games at once, and backups that a Pimax update can't wipe.`n`nThis quick tour takes about a minute." },
     @{ Icon = 'IcoImage'; Title = 'Custom library images'
-       Body = "Pick an imported game on the left, then click Find image to search Steam and SteamGridDB, paste an image link, or Browse for a file. Click Apply image to use it.`n`nSteam and Oculus games get their image from the store every time Pimax starts. To give one your own image, add it with Import in Pimax Play." },
+       Body = "Pick an imported game on the left, then click Find image to search Steam and SteamGridDB, paste an image link, or Browse for a file. Click Apply image to use it.`n`nSteam and Oculus games get their image from the store every time Pimax starts. To give one your own image, add its .exe with Add games." },
+    @{ Icon = 'IcoPlus'; Title = 'Add games'
+       Body = "Add games... puts games into Pimax Play without using its Import button. Pick .exe files or shortcuts, or scan a folder such as a Steam library, and the app can find a cover image for each one.`n`nEdit / remove... renames an imported game, points it at a different .exe (handy for mods), or takes it out of the library." },
     @{ Icon = 'IcoList'; Title = 'Library order'
        Body = "Library order lets you tick games to pin them and drag them into any order. Pinned games always show first in Pimax Play.`n`nTip: click Pin all, then drag, to control the whole list." },
     @{ Icon = 'IcoSliders'; Title = 'Game settings'
@@ -2143,6 +2573,11 @@ if ($Test) {
         $sw = Show-GameSettings $sid; Save-Shot $sw 'settings'; $sw.Close()
         $bw = Show-Backups $null $null; Save-Shot $bw 'backups'; $bw.Close()
         if ($pick) { $script:FinderTerm = 'Crysis'; $fw = Show-Finder $pick.Tag; Save-Shot $fw 'finder'; $fw.Close() }
+        $aw = Show-AddGames
+        if ($env:PGM_SCAN) { foreach ($f in @(Find-GameExes $env:PGM_SCAN) | Select-Object -First 9) { [void](& $script:aAddRow $f.Name $f.Route $f.Others) } }
+        & $script:aUpdate; & $script:aSay "Found $($script:aRows.Count) game(s). Check the names, then click Add."
+        Save-Shot $aw 'add-games'; $aw.Close()
+        if ($pick) { $ew = Show-EditGame $pick.Tag; Save-Shot $ew 'edit-game'; $ew.Close() }
         $window.Close()
         return
     }
@@ -2279,6 +2714,57 @@ if ($Test) {
     $manual = Get-Snapshots | Where-Object { $_.reason -eq 'Manual' } | Select-Object -First 1
     "  deleted: " + (Remove-Snapshots @($manual.Path)) + "; backups left: " + ((Get-Snapshots | ForEach-Object reason) -join ', ')
     try { Remove-Snapshots @($AppConfigDir) | Out-Null; "  SAFETY FAILED: deleted a non-backup folder" } catch { "  refuses non-backup folder: " + $_.Exception.Message.Substring(0, 22) + " ... (still exists: $(Test-Path $AppConfigDir))" }
+    "--- Add / edit / remove games (on the temporary copies):"
+    $gdir = Join-Path $bt 'games'
+    foreach ($f in 'Cool Game\CoolGame.exe', 'Cool Game\unins000.exe', 'Cool Game\CrashReporter.exe', 'Cool Game\Tools\CoolGameEditor.exe', 'Other Thing\bin\win64\Launcher.exe', 'Other Thing\bin\win64\OtherThing.exe', 'Tiny\tiny.exe') {
+        $p = Join-Path $gdir $f; New-Item -ItemType Directory -Force (Split-Path $p) | Out-Null; Copy-Item "$env:WINDIR\System32\notepad.exe" $p
+    }
+    [IO.File]::WriteAllBytes((Join-Path $gdir 'Tiny\tiny.exe'), (New-Object byte[] 1000))
+    $found = @(Find-GameExes $gdir)
+    "  scan found: " + (($found | ForEach-Object { "$($_.Name) -> $($_.Route.Substring($gdir.Length + 1))" }) -join '; ')
+    $script:restarts = 0
+    $before = @(Get-ChildItem $ManifestDir -Filter *.json).Count
+    $aw = Show-AddGames
+    foreach ($f in $found) { [void](& $script:aAddRow $f.Name $f.Route $f.Others) }
+    $crysisRoute = Get-Route (Get-PimaxGames | Where-Object { $_.Name -eq 'CrysisVR' } | Select-Object -First 1)
+    [void](& $script:aAddRow 'Crysis again' $crysisRoute @())
+    "  duplicate of the same file in the list refused: " + (-not (& $script:aAddRow 'Cool again' $found[0].Route @()))
+    & $script:aUpdate
+    "  rows: $($script:aRows.Count); already-in-library row unticked: $(-not ($script:aRows | Where-Object { $_.InLibrary }).Check.IsChecked); note: $(($script:aRows | Where-Object { $_.InLibrary }).Note.Text); button: $($script:aAddBtn.Content)"
+    $script:aImages.IsChecked = $false
+    $script:aRows[0].Name.Text = 'Cool Game VR'
+    $script:aAddBtn.RaiseEvent((New-Object Windows.RoutedEventArgs([Windows.Controls.Primitives.ButtonBase]::ClickEvent)))
+    "  result: $($script:addResult.Message)  restarts: $script:restarts"
+    $newFiles = @(Get-ChildItem $ManifestDir -Filter *.json | Where-Object { ([IO.File]::ReadAllText($_.FullName)) -match 'Cool Game VR|Other Thing' })
+    "  manifests: $before -> $(@(Get-ChildItem $ManifestDir -Filter *.json).Count); new ones: $($newFiles.Count)"
+    foreach ($f in $newFiles) { $b = [IO.File]::ReadAllBytes($f.FullName); "  $($f.Name) (BOM: $($b[0] -eq 0xEF)): " + [IO.File]::ReadAllText($f.FullName).Replace($gdir, '<games>') }
+    $cool = Get-PimaxGames | Where-Object { $_.Name -eq 'Cool Game VR' }
+    "  listed as: $($cool.Source); id format ok: $((Get-GameId $cool) -match '^local\.[0-9a-f]{8}$')"
+    $r2 = Add-ImportedGames @([pscustomobject]@{ Name = 'Again'; Route = $cool | ForEach-Object { Get-Route $_ }; Image = $null }, [pscustomobject]@{ Name = 'Missing'; Route = 'C:\nope\x.exe'; Image = $null })
+    "  adding again: added $($r2.Added.Count); skipped: $($r2.Skipped -join '; ')"
+    $img = Get-ChildItem $CoverDir, (Join-Path $env:APPDATA 'PimaxGameManager\covers') -File -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($img) {
+        $r3 = Add-ImportedGames @([pscustomobject]@{ Name = 'Tiny'; Route = (Join-Path $gdir 'Tiny\tiny.exe'); Image = $img.FullName })
+        $tiny = Get-PimaxGames | Where-Object { $_.Name -eq 'Tiny' }
+        "  with image: added $($r3.Added.Count), icon copied into covers: $($tiny.Icon.StartsWith($CoverDir) -and (Test-Path $tiny.Icon))"
+    }
+    # Edit: rename and point at the other exe
+    $ew = Show-EditGame $cool
+    $script:eName.Text = 'Cool Game (mod)'; $script:eRoute.Text = (Join-Path $gdir 'Cool Game\Tools\CoolGameEditor.exe')
+    $script:ew.FindName('ESave').RaiseEvent((New-Object Windows.RoutedEventArgs([Windows.Controls.Primitives.ButtonBase]::ClickEvent)))
+    $cool2 = Get-PimaxGames | Where-Object { $_.File -eq $cool.File }
+    "  edited: $($cool2.Name) -> $(Split-Path (Get-Route $cool2) -Leaf); message: $($script:editResult.Message); safety copy: $(@(Get-ChildItem (Join-Path $BackupDir 'edited-games')).Count)"
+    try { Set-ImportedGame $cool2 'X' $crysisRoute; '  EDIT SAFETY FAILED' } catch { "  refuses an exe already in the library: $($_.Exception.Message)" }
+    try { Set-ImportedGame (Get-PimaxGames | Where-Object Source -ne 'Imported' | Select-Object -First 1) 'X' $crysisRoute; '  EDIT SAFETY FAILED' } catch { "  refuses Steam games: $($_.Exception.Message.Substring(0, 40))..." }
+    # Remove: pin it first, then check it comes off the pinned list
+    $cid = Get-GameId $cool2
+    $pins = @(Get-PinnedIds) + $cid
+    [IO.File]::WriteAllText($ClientConfig, (Set-PinnedIdsInText ([IO.File]::ReadAllText($ClientConfig)) $pins), $Utf8NoBom)
+    $before = @(Get-ChildItem $ManifestDir -Filter *.json).Count
+    $rm = Remove-ImportedGames @($cool2, (Get-PimaxGames | Where-Object Source -ne 'Imported' | Select-Object -First 1))
+    "  removed: $($rm.Removed) (Steam game ignored); manifests $before -> $(@(Get-ChildItem $ManifestDir -Filter *.json).Count); entry kept in backups: $(@(Get-ChildItem (Join-Path $BackupDir 'removed-games')).Count -eq 1); still pinned: $((Get-PinnedIds) -contains $cid); other pins kept: $(@(Get-PinnedIds).Count)"
+    "  restarts for add/add/add/edit/remove: $script:restarts"
+    $aw.Close(); $ew.Close()
     $ManifestDir = $keepManifest; $ClientConfig = $keepClient
     Remove-Item $bt -Recurse -Force
     "--- Library order window (not shown):"
