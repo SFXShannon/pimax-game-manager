@@ -128,9 +128,19 @@ Backups are stored in %APPDATA%\PimaxGameManager\snapshots, outside Pimax's fold
 
 ## Updates
 
-When the app opens, it checks this repo for a newer release in the background. If there is one, a bar at the top offers a **Download** button that opens the release page. Nothing is downloaded or installed automatically.
+When the app opens, it checks this repo for a newer release in the background. If there is one, a bar at the top offers **Update now**. Click it and the app:
 
-The bottom-right corner shows the app version and whether it's **Up to date**, has an **Update available**, or **Couldn't check** (for example when offline). Click it to check again.
+1. downloads the new version from the GitHub release (progress shows in the bar),
+2. checks the download (its size, GitHub's SHA-256 checksum when listed, and the version number inside the file),
+3. closes, installs the update, and reopens by itself.
+
+If you installed with `PimaxGameManagerSetup.exe`, the new setup runs silently into the same folder, keeping your shortcuts. If you use the plain `PimaxGameManager.exe`, that file is replaced where it is; the old one is only removed once the new one is in place. Nothing is ever downloaded or installed until you click **Update now**. Your backups, images and settings are not touched. Each update is logged in `%APPDATA%\PimaxGameManager\update.log`.
+
+Running the `.ps1` script instead of the exe? The button says **Download** and opens the release page.
+
+The bottom-right corner shows the app version and whether it's **Up to date**, has an **Update available** (click to show the update bar), or **Couldn't check** (for example when offline). Click it to check again.
+
+*Updating in the app works from version 1.7.1 onward. If you have an older version, download 1.7.1 once from the [releases page](https://github.com/SFXShannon/pimax-game-manager/releases/latest).*
 
 ## Feedback & bug reports
 
@@ -166,13 +176,13 @@ powershell -ExecutionPolicy Bypass -File .\PimaxGameManager.ps1
 
 ```powershell
 Install-Module ps2exe -Scope CurrentUser
-Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.7.0
+Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.7.1
 ```
 
 To build the installer too, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
-& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.7.0 .\PimaxGameManager.iss
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.7.1 .\PimaxGameManager.iss
 ```
 
 The app icon and `assets/logo.png` are generated from the logo shapes used in the app:

@@ -36,7 +36,7 @@ try {
     if ((Test-Path $legacyCfg) -and -not (Test-Path $newCfg)) { Copy-Item $legacyCfg $newCfg }
 } catch { }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
-$AppVersion = '1.7.0'
+$AppVersion = '1.7.1'
 $RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-game-manager/releases/latest'
 
 # ---------- Library ----------
@@ -2475,7 +2475,115 @@ function Get-UpdateInfo($release) {
     $tag = [string]$release.tag_name
     try { $latest = [version]($tag.TrimStart('v', 'V')) } catch { return $null }
     if ($latest -le [version]$AppVersion) { return $null }
-    [pscustomobject]@{ Version = $latest.ToString(); Url = [string]$release.html_url }
+    $asset = { param($n) $a = @($release.assets) | Where-Object { $_.name -ieq $n } | Select-Object -First 1
+               if ($a) { [pscustomobject]@{ Url = [string]$a.browser_download_url; Size = [long]$a.size; Sha256 = ([string]$a.digest -replace '^sha256:', '') } } }
+    [pscustomobject]@{ Version = $latest.ToString(); Url = [string]$release.html_url
+                       Setup = (& $asset 'PimaxGameManagerSetup.exe'); Exe = (& $asset 'PimaxGameManager.exe') }
+}
+
+# ---------- Self-update ----------
+# How this copy is running: 'installed' (by PimaxGameManagerSetup.exe), 'portable' (the plain exe), or 'script' (the .ps1)
+# (an installed copy has the installer's unins000.exe / unins000.dat next to it)
+function Get-InstallKind([string]$exePath) {
+    if (-not $exePath) { $exePath = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName }
+    if ([IO.Path]::GetFileNameWithoutExtension($exePath) -ine 'PimaxGameManager') { return [pscustomobject]@{ Kind = 'script'; Exe = $exePath } }
+    $dir = Split-Path $exePath
+    if ((Test-Path -LiteralPath (Join-Path $dir 'unins000.exe')) -and (Test-Path -LiteralPath (Join-Path $dir 'unins000.dat'))) { return [pscustomobject]@{ Kind = 'installed'; Exe = $exePath } }
+    return [pscustomobject]@{ Kind = 'portable'; Exe = $exePath }
+}
+
+# Checks a downloaded file: size, SHA-256 (when GitHub lists one) and the version stamped in the file
+function Test-UpdateFile([string]$path, $asset, [string]$version) {
+    $f = Get-Item -LiteralPath $path
+    if ($asset.Size -and $f.Length -ne $asset.Size) { throw "The download is incomplete ($($f.Length) of $($asset.Size) bytes)." }
+    if ($asset.Sha256 -and (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ine $asset.Sha256) { throw "The download didn't match GitHub's checksum." }
+    $v = [string]$f.VersionInfo.FileVersion
+    try { $ok = ([version]$v -eq [version]$version) } catch { $ok = $false }
+    if (-not $ok) { throw "The downloaded file is version '$v', not $version." }
+}
+
+# Writes the small script that runs after the app closes: waits for it to exit, installs the update
+# (silent installer, or swaps the exe and keeps the old one as .old until the new one is in place), then reopens the app.
+function New-UpdaterScript([string]$kind, [string]$download, [string]$target, [int]$appPid, [string]$log, [bool]$launch) {
+    $q = { param($s) "'" + ($s -replace "'", "''") + "'" }
+    @"
+`$ErrorActionPreference = 'Stop'
+function Log([string]`$m) { Add-Content -LiteralPath $(& $q $log) -Value ("{0:yyyy-MM-dd HH:mm:ss}  {1}" -f (Get-Date), `$m) }
+try {
+    Log 'Waiting for Pimax Game Manager to close'
+    try { Wait-Process -Id $appPid -Timeout 60 -ErrorAction Stop } catch { }
+    Start-Sleep -Milliseconds 800
+    if ($(& $q $kind) -eq 'installed') {
+        Log 'Running the installer silently'
+        `$dirArg = '/DIR="' + (Split-Path $(& $q $target)) + '"'
+        `$p = Start-Process -FilePath $(& $q $download) -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-','/CURRENTUSER','/CLOSEAPPLICATIONS',`$dirArg -Wait -PassThru
+        Log "Installer finished with code `$(`$p.ExitCode)"
+        if (`$p.ExitCode -ne 0) { throw "installer exit code `$(`$p.ExitCode)" }
+        Log ("Installed version: " + (Get-Item -LiteralPath $(& $q $target)).VersionInfo.FileVersion)
+    } else {
+        `$target = $(& $q $target); `$old = `$target + '.old'
+        Log "Replacing `$target"
+        for (`$i = 0; `$i -lt 20; `$i++) { try { Move-Item -LiteralPath `$target -Destination `$old -Force; break } catch { Start-Sleep -Milliseconds 500; if (`$i -eq 19) { throw } } }
+        try { Copy-Item -LiteralPath $(& $q $download) -Destination `$target -Force }
+        catch { Move-Item -LiteralPath `$old -Destination `$target -Force; throw }
+        Remove-Item -LiteralPath `$old -Force -ErrorAction SilentlyContinue
+    }
+    Log 'Update installed'
+} catch { Log ("Update failed: " + `$_.Exception.Message) }
+Remove-Item -LiteralPath $(& $q $download) -Force -ErrorAction SilentlyContinue
+if (`$$launch) { Log 'Starting the app'; Start-Process -FilePath $(& $q $target) }
+"@
+}
+
+# Downloads the update in the background (progress shown in the update bar), then closes the app so the updater can finish
+function Start-SelfUpdate {
+    $info = $script:UpdateInfo
+    if (-not $info) { return }
+    $inst = Get-InstallKind
+    $asset = if ($inst.Kind -eq 'installed') { $info.Setup } else { $info.Exe }
+    if ($inst.Kind -eq 'script' -or -not $asset) { Start-Process $info.Url; return }
+    $dir = Join-Path $env:TEMP 'PimaxGameManager-update'
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $script:UpdDownload = Join-Path $dir ("{0}-{1}" -f $info.Version, [IO.Path]::GetFileName(([uri]$asset.Url).LocalPath))
+    Remove-Item -LiteralPath $script:UpdDownload -Force -ErrorAction SilentlyContinue
+    $script:UpdKind = $inst; $script:UpdAsset = $asset
+    $ui.UpdateBtn.IsEnabled = $false; $ui.UpdateClose.IsEnabled = $false
+    $ui.UpdateText.Text = "Downloading version $($info.Version)..."
+    $wc = New-Object Net.WebClient
+    $wc.Headers.Add('User-Agent', 'pimax-game-manager')
+    $script:UpdDl = $wc.DownloadFileTaskAsync([uri]$asset.Url, $script:UpdDownload)
+    $script:UpdTimer = New-Object Windows.Threading.DispatcherTimer
+    $script:UpdTimer.Interval = [TimeSpan]::FromMilliseconds(300)
+    $script:UpdTimer.Add_Tick({
+        $v = $script:UpdateInfo.Version
+        if (-not $script:UpdDl.IsCompleted) {
+            $got = 0; try { $got = (Get-Item -LiteralPath $script:UpdDownload -ErrorAction Stop).Length } catch { }
+            if ($script:UpdAsset.Size) { $ui.UpdateText.Text = "Downloading version $v...  {0:0}%" -f [Math]::Min(99, 100 * $got / $script:UpdAsset.Size) }
+            return
+        }
+        $script:UpdTimer.Stop()
+        $fail = {
+            param($m)
+            $ui.UpdateText.Text = "Couldn't update: $m  Click Update now to try again, or download it from GitHub."
+            $ui.UpdateBtn.IsEnabled = $true; $ui.UpdateClose.IsEnabled = $true
+            Remove-Item -LiteralPath $script:UpdDownload -Force -ErrorAction SilentlyContinue
+        }
+        if ($script:UpdDl.Status -ne 'RanToCompletion') { & $fail "the download failed ($($script:UpdDl.Exception.InnerException.Message))."; return }
+        try { Test-UpdateFile $script:UpdDownload $script:UpdAsset $v } catch { & $fail $_.Exception.Message; return }
+        try {
+            $log = Join-Path $DataDir 'update.log'
+            $helper = Join-Path (Split-Path $script:UpdDownload) 'apply-update.ps1'
+            $text = New-UpdaterScript $script:UpdKind.Kind $script:UpdDownload $script:UpdKind.Exe $PID $log $true
+            [IO.File]::WriteAllText($helper, $text, (New-Object Text.UTF8Encoding($true)))
+            Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$helper`""
+            Set-AppSetting 'updatedFrom' $AppVersion
+            $ui.UpdateText.Text = "Installing version $v - the app will reopen in a moment..."
+            $window.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::Background)
+            Start-Sleep -Milliseconds 600
+            $window.Close()
+        } catch { & $fail $_.Exception.Message }
+    })
+    $script:UpdTimer.Start()
 }
 
 function Set-VersionLabel([string]$state) {
@@ -2493,8 +2601,11 @@ function Set-VersionLabel([string]$state) {
 function Show-UpdateNotice($release) {
     $info = Get-UpdateInfo $release
     if (-not $info) { Set-VersionLabel 'current'; return }
-    $script:UpdateUrl = $info.Url
-    $ui.UpdateText.Text = "Version $($info.Version) of Pimax Game Manager is available (you have $AppVersion)."
+    $script:UpdateUrl = $info.Url; $script:UpdateInfo = $info
+    $auto = ((Get-InstallKind).Kind -ne 'script') -and $info.Setup -and $info.Exe
+    $ui.UpdateBtn.Content = if ($auto) { 'Update now' } else { 'Download' }
+    $ui.UpdateBtn.ToolTip = if ($auto) { 'Download and install the update, then reopen the app' } else { 'Open the release page on GitHub' }
+    $ui.UpdateText.Text = "Version $($info.Version) of Pimax Game Manager is available (you have $AppVersion)." + $(if ($auto) { ' Update now installs it and reopens the app.' } else { '' })
     $ui.UpdateBar.Visibility = 'Visible'
     Set-VersionLabel 'available'
 }
@@ -2528,11 +2639,20 @@ function Start-UpdateCheck {
 function Get-ReportUrl { 'https://github.com/SFXShannon/pimax-game-manager/issues/new?template=bug_report.yml&version=' + [uri]::EscapeDataString($AppVersion) }
 $ui.ReportLink.Add_MouseLeftButtonUp({ try { Start-Process (Get-ReportUrl) } catch { Set-Status "Couldn't open the browser. Report problems at github.com/SFXShannon/pimax-game-manager/issues" $true } })
 
-$ui.UpdateBtn.Add_Click({ if ($script:UpdateUrl) { Start-Process $script:UpdateUrl } })
+$ui.UpdateBtn.Add_Click({ try { Start-SelfUpdate } catch { $ui.UpdateBtn.IsEnabled = $true; $ui.UpdateClose.IsEnabled = $true; Set-Status "Couldn't update: $($_.Exception.Message)" $true } })
 $ui.UpdateClose.Add_Click({ $ui.UpdateBar.Visibility = 'Collapsed' })
 $ui.VersionLabel.Add_MouseLeftButtonUp({
-    if ($script:VersionState -eq 'available' -and $script:UpdateUrl) { Start-Process $script:UpdateUrl }
+    if ($script:VersionState -eq 'available' -and $script:UpdateInfo) { $ui.UpdateBar.Visibility = 'Visible' }
     else { Start-UpdateCheck }
+})
+# After an update: say so once
+$window.Add_Loaded({
+    if ($Test) { return }
+    $from = [string](Get-AppSetting 'updatedFrom')
+    if (-not $from) { return }
+    Set-AppSetting 'updatedFrom' ''
+    if ($from -ne $AppVersion) { Set-Status "Updated from $from to $AppVersion." }
+    else { Set-Status "The update didn't install - details are in $(Join-Path $DataDir 'update.log')" $true }
 })
 $window.Add_Loaded({ if (-not $Test) { Start-UpdateCheck } })
 $window.Add_Loaded({ if ($Test -or (Get-AppSetting 'hideTutorial')) { return }; $window.Dispatcher.BeginInvoke([action]{ try { Show-Tutorial } catch { } }, [Windows.Threading.DispatcherPriority]::ApplicationIdle) | Out-Null })
@@ -2767,6 +2887,43 @@ if ($Test) {
     $aw.Close(); $ew.Close()
     $ManifestDir = $keepManifest; $ClientConfig = $keepClient
     Remove-Item $bt -Recurse -Force
+    "--- Self-update (temporary folder):"
+    $fake = [pscustomobject]@{ tag_name = 'v99.1.0'; html_url = 'https://example/rel'; assets = @(
+        [pscustomobject]@{ name = 'PimaxGameManager.exe'; size = 10; digest = 'sha256:ABC'; browser_download_url = 'https://example/PimaxGameManager.exe' },
+        [pscustomobject]@{ name = 'PimaxGameManagerSetup.exe'; size = 20; digest = $null; browser_download_url = 'https://example/PimaxGameManagerSetup.exe' }) }
+    $ui2 = Get-UpdateInfo $fake
+    "  newer release parsed: $($ui2.Version); exe $($ui2.Exe.Size) bytes sha $($ui2.Exe.Sha256); setup $($ui2.Setup.Size) bytes; older ignored: $($null -eq (Get-UpdateInfo ([pscustomobject]@{ tag_name = 'v1.0.0' })))"
+    $instDir = "$env:LOCALAPPDATA\Programs\Pimax Game Manager"
+    "  kind: script=$((Get-InstallKind 'C:\x\powershell.exe').Kind); temp exe=$((Get-InstallKind 'C:\Temp\PimaxGameManager.exe').Kind); install folder=$((Get-InstallKind (Join-Path $instDir 'PimaxGameManager.exe')).Kind)"
+    $ut = Join-Path $env:TEMP ('pgm-upd-' + [guid]::NewGuid().ToString('N')); New-Item -ItemType Directory $ut | Out-Null
+    $newExe = Join-Path $PSScriptRoot 'PimaxGameManager.exe'
+    $newSize = (Get-Item $newExe).Length; $exeVer = (Get-Item $newExe).VersionInfo.FileVersion; $newHash = (Get-FileHash $newExe -Algorithm SHA256).Hash
+    $dl = Join-Path $ut 'download.exe'; Copy-Item $newExe $dl
+    $check = { param($a, $v) try { Test-UpdateFile $dl $a $v; 'ok' } catch { $_.Exception.Message } }
+    "  file check good: " + (& $check ([pscustomobject]@{ Size = $newSize; Sha256 = $newHash }) $exeVer)
+    "  wrong size: " + (& $check ([pscustomobject]@{ Size = 5; Sha256 = '' }) $exeVer)
+    "  wrong hash: " + (& $check ([pscustomobject]@{ Size = $newSize; Sha256 = 'AB' }) $exeVer)
+    "  wrong version: " + (& $check ([pscustomobject]@{ Size = $newSize; Sha256 = '' }) '9.9.9')
+    # Portable swap: an "old" exe, a dummy app process to wait for, then run the real updater script
+    $target = Join-Path $ut 'PimaxGameManager.exe'
+    $oldSrc = Join-Path $instDir 'PimaxGameManager.exe'
+    if (Test-Path $oldSrc) { Copy-Item $oldSrc $target } else { [IO.File]::WriteAllText($target, 'old') }
+    $oldVer = (Get-Item $target).VersionInfo.FileVersion
+    $dummy = Start-Process powershell.exe -WindowStyle Hidden -ArgumentList '-NoProfile -Command Start-Sleep -Seconds 3' -PassThru
+    $ulog = Join-Path $ut 'update.log'; $helper = Join-Path $ut 'apply-update.ps1'
+    [IO.File]::WriteAllText($helper, (New-UpdaterScript 'portable' $dl $target $dummy.Id $ulog $false), (New-Object Text.UTF8Encoding($true)))
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $hp = Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$helper`"" -PassThru; $hp.WaitForExit(90000) | Out-Null
+    "  portable update: $oldVer -> $((Get-Item $target).VersionInfo.FileVersion) after $([int]$sw.Elapsed.TotalSeconds)s (waited for the app: $($sw.Elapsed.TotalSeconds -ge 2.5)); .old left: $(Test-Path ($target + '.old')); download cleaned up: $(-not (Test-Path $dl))"
+    "  log: " + ((Get-Content $ulog | ForEach-Object { $_.Substring(21) }) -join ' | ')
+    # Swap that can't complete (target locked) must leave the old exe in place
+    Copy-Item $newExe $dl; $lockT = Join-Path $ut 'Locked\PimaxGameManager.exe'; New-Item -ItemType Directory (Split-Path $lockT) | Out-Null; Copy-Item $target $lockT
+    $fs = [IO.File]::Open($lockT, 'Open', 'Read', 'None')
+    [IO.File]::WriteAllText($helper, (New-UpdaterScript 'portable' $dl $lockT 999999 $ulog $false), (New-Object Text.UTF8Encoding($true)))
+    $hp = Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$helper`"" -PassThru; $hp.WaitForExit(90000) | Out-Null
+    $fs.Close()
+    "  locked exe: still there: $(Test-Path $lockT); last log: $((Get-Content $ulog | Select-Object -Last 1).Substring(21))"
+    Remove-Item $ut -Recurse -Force
     "--- Library order window (not shown):"
     Show-Order | ForEach-Object { "  $_" }
     "--- Pin list write test (in memory only):"
