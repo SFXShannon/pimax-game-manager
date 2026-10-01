@@ -8,7 +8,7 @@ A Windows tool for managing your **Pimax Play** library: add games (one at a tim
 
 *Formerly Pimax Cover Changer.*
 
-![Pimax Game Manager](screenshots/main-window-v1.7.2.png)
+![Pimax Game Manager](screenshots/main-window-v1.8.1.png)
 
 ## Download
 
@@ -22,9 +22,9 @@ Windows SmartScreen or Defender may warn about it as an unrecognized app. If you
 
 ## First-launch tour
 
-The first time you open the app, a short tour walks through images, adding games, library order, game settings and backups. Use **Next** / **Back** (or the arrow keys) to step through it.
+The first time you open the app, a short tour walks through playing games, images, adding games, library order, game settings, backups, applying changes, and updates. Use **Next** / **Back** (or the arrow keys) to step through it.
 
-![Tour](screenshots/tutorial-v1.6.0.png)
+![Tour](screenshots/tutorial-v1.8.1.png)
 
 Tick **Don't show this at startup** to stop it opening each time. You can open it again whenever you like with **Tutorial** at the bottom of the main window.
 
@@ -199,13 +199,13 @@ powershell -ExecutionPolicy Bypass -File .\PimaxGameManager.ps1
 
 ```powershell
 Install-Module ps2exe -Scope CurrentUser
-Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.8.0
+Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.8.1
 ```
 
 To build the installer too, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
-& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.8.0 .\PimaxGameManager.iss
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.8.1 .\PimaxGameManager.iss
 ```
 
 The app icon and `assets/logo.png` are generated from the logo shapes used in the app:

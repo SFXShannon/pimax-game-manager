@@ -36,7 +36,7 @@ try {
     if ((Test-Path $legacyCfg) -and -not (Test-Path $newCfg)) { Copy-Item $legacyCfg $newCfg }
 } catch { }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
-$AppVersion = '1.8.0'
+$AppVersion = '1.8.1'
 $RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-game-manager/releases/latest'
 
 # ---------- Library ----------
@@ -1206,7 +1206,7 @@ $ThemeXaml = @'
         <Image Source="{StaticResource LogoImage}" Height="34" Margin="0,0,14,0" VerticalAlignment="Center"/>
         <StackPanel VerticalAlignment="Center">
           <TextBlock FontSize="21" FontWeight="SemiBold"><Run Text="Pimax"/><Run Text=" Game Manager" Foreground="{StaticResource LogoGrad}"/></TextBlock>
-          <TextBlock Text="Add games  &#183;  library images  &#183;  library order  &#183;  game settings  &#183;  backups" Foreground="#8B93A5" FontSize="12" Margin="1,1,0,0"/>
+          <TextBlock Text="Play &amp; add games  &#183;  library images  &#183;  library order  &#183;  game settings  &#183;  backups" Foreground="#8B93A5" FontSize="12" Margin="1,1,0,0"/>
         </StackPanel>
       </DockPanel>
       <Border Grid.Row="1" Height="1" Margin="0,14,0,0" Background="{StaticResource LineGrad}"/>
@@ -2573,7 +2573,9 @@ $window.Add_Loaded({ if ($Test) { return }; $window.Dispatcher.BeginInvoke([acti
 # ---------- Tutorial (shown at startup until the user turns it off) ----------
 $TutorialSteps = @(
     @{ Icon = 'Logo'; Title = 'Welcome to Pimax Game Manager'
-       Body = "Keep your Pimax Play library the way you want it: your own tile images, your own order, graphics settings for many games at once, and backups that a Pimax update can't wipe.`n`nThis quick tour takes about a minute." },
+       Body = "Keep your Pimax Play library the way you want it: add and start games, your own tile images, your own order, graphics settings for many games at once, and backups that a Pimax update can't wipe.`n`nThis quick tour takes about a minute." },
+    @{ Icon = 'IcoPlay'; Title = 'Play games'
+       Body = "Pick a game on the left and click Play at the top right, or just double-click it in the list.`n`nGames start the same way Pimax Play starts them: Steam games through Steam, imported and Oculus games from their own .exe. Which runtime a game uses (Pimax OpenXR or SteamVR) is still set in Pimax Play." },
     @{ Icon = 'IcoImage'; Title = 'Custom library images'
        Body = "Pick an imported game on the left, then click Find image to search Steam and SteamGridDB, paste an image link, or Browse for a file. Click Use image to use it.`n`nSteam and Oculus games get their image from the store every time Pimax starts. To give one your own image, add its .exe with Add games." },
     @{ Icon = 'IcoPlus'; Title = 'Add games'
@@ -2581,11 +2583,13 @@ $TutorialSteps = @(
     @{ Icon = 'IcoList'; Title = 'Library order'
        Body = "Library order lets you tick games to pin them and drag them into any order. Pinned games always show first in Pimax Play.`n`nTip: click Pin all, then drag, to control the whole list." },
     @{ Icon = 'IcoSliders'; Title = 'Game settings'
-       Body = "Edit Pimax's per-game graphics settings in one place. Tick Custom to give a game its own value; everything else follows Global.`n`nApply to... copies one setting to other games, and nothing is written until you click Save all changes." },
+       Body = "Edit Pimax's per-game graphics settings in one place. Tick Custom to give a game its own value; everything else follows Global.`n`nApply to... copies one setting to other games, Copy all settings to... gives them the same full setup, and nothing is written until you click Save all changes." },
     @{ Icon = 'IcoArchive'; Title = 'Backups'
        Body = "A backup is saved automatically whenever you change something here. If a Pimax update resets your images, order, settings or headset setup, an orange bar offers to put them back.`n`nYou can also restore any backup yourself from Backup & restore." },
     @{ Icon = 'IcoPower'; Title = 'Applying changes'
-       Body = "New games, edits and images wait in a yellow bar at the top until you click Apply & restart Pimax Play, so you can make lots of changes and restart Pimax once. If you close the app first, it asks whether to apply them.`n`nApplying restarts Pimax Play and its service, so do it when you're not in a game. Library order and Game settings saves apply waiting changes in the same restart.`n`nYou can open this tour again any time from Tutorial at the bottom of the window." }
+       Body = "New games, edits and images wait in a yellow bar at the top until you click Apply & restart Pimax Play, so you can make lots of changes and restart Pimax once. If you close the app first, it asks whether to apply them.`n`nApplying restarts Pimax Play and its service, so do it when you're not in a game. Library order and Game settings saves apply waiting changes in the same restart." },
+    @{ Icon = 'IcoDownload'; Title = 'Updates and help'
+       Body = "When a new version is out, a blue bar at the top offers Update now: the app downloads it, installs it and reopens. The bottom-right corner shows whether you're up to date.`n`nReport a problem opens a bug report on GitHub. You can open this tour again any time from Tutorial at the bottom of the window." }
 )
 
 function Show-Tutorial {
@@ -2901,9 +2905,8 @@ if ($Test) {
             if ($wg) { $script:FinderTerm = $null; $fw = Show-Finder $wg; "  finder on waiting game $($wg.Name): $(@($fw.FindName('Results').Children).Count) images"; Save-Shot $fw 'finder-pending'; $fw.Close() }
             $script:Pending.Clear(); Fill-List
         }
-        $tw = Show-Tutorial; Save-Shot $tw 'tutorial-1'
-        $script:tIndex = 1; & $script:tRender; Save-Shot $tw 'tutorial-2'
-        $script:tIndex = 6; & $script:tRender; Save-Shot $tw 'tutorial-7'
+        $tw = Show-Tutorial
+        for ($ti = 0; $ti -lt $TutorialSteps.Count; $ti++) { $script:tIndex = $ti; & $script:tRender; Save-Shot $tw "tutorial-$($ti + 1)" }
         $tw.Close()
         [void](Show-Order); Save-Shot $script:ow 'order'; $script:ow.Close()
         $sid = if ($pick) { Get-GameId $pick.Tag } else { 'global' }
