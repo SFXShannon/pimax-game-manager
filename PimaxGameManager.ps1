@@ -36,7 +36,7 @@ try {
     if ((Test-Path $legacyCfg) -and -not (Test-Path $newCfg)) { Copy-Item $legacyCfg $newCfg }
 } catch { }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
-$AppVersion = '1.7.3'
+$AppVersion = '1.8.0'
 $RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-game-manager/releases/latest'
 
 # ---------- Library ----------
@@ -654,6 +654,33 @@ function Get-Route($game) {
     try { return [string](([IO.File]::ReadAllText($game.File).TrimStart([char]0xFEFF) | ConvertFrom-Json).route) } catch { return '' }
 }
 
+# ---------- Launching games ----------
+# Uses the same launch path Pimax Play does: Steam links (steam://launch/<id>/VR) and shortcuts are opened as-is, an .exe is started in its own folder
+function Get-LaunchTarget($game) {
+    $route = (Get-Route $game).Trim('"', ' ')
+    if (-not $route) { return $null }
+    if ($route -match '^[a-zA-Z][a-zA-Z0-9+.-]+://') { return [pscustomobject]@{ Kind = 'link'; Path = $route } }
+    if ($route -match '\.(lnk|url)$') { return [pscustomobject]@{ Kind = 'shortcut'; Path = $route } }
+    return [pscustomobject]@{ Kind = 'exe'; Path = $route }
+}
+
+# The app runs as admin, so the game is opened through Explorer: it then runs as you, not as admin, just as it would from Pimax Play or Steam.
+# Explorer would start an .exe in System32, so it goes through a shortcut that sets the game's own folder as the working folder.
+function Start-Game($game) {
+    $t = Get-LaunchTarget $game
+    if (-not $t) { throw "Pimax Play has no launch path for this game." }
+    if ($t.Kind -ne 'link' -and -not (Test-Path -LiteralPath $t.Path)) { throw "the game file wasn't found: $($t.Path)" }
+    $open = $t.Path
+    if ($t.Kind -eq 'exe') {
+        $dir = Join-Path $DataDir 'launch'
+        if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
+        $open = Join-Path $dir ((Get-GameId $game) + '.lnk')
+        $s = (New-Object -ComObject WScript.Shell).CreateShortcut($open)
+        $s.TargetPath = $t.Path; $s.WorkingDirectory = (Split-Path $t.Path -Parent); $s.Save()
+    }
+    Start-Process explorer.exe -ArgumentList ('"{0}"' -f $open)
+}
+
 function Test-HasOrigBackup($game) {
     $n = [IO.Path]::GetFileName($game.File) + '.orig'
     return (Test-Path (Join-Path $BackupDir $n)) -or (Test-Path (Join-Path $LegacyBackupDir $n))
@@ -908,6 +935,7 @@ $ThemeXaml = @'
     <Geometry x:Key="IcoArrowRight">M5 12 H19 M13 6 L19 12 L13 18</Geometry>
     <Geometry x:Key="IcoArrowLeft">M19 12 H5 M11 6 L5 12 L11 18</Geometry>
     <Geometry x:Key="IcoPlus">M12 5 V19 M5 12 H19</Geometry>
+    <Geometry x:Key="IcoPlay">M7.5 4.5 L19 12 L7.5 19.5 Z</Geometry>
     <Geometry x:Key="IcoEdit">M4 20 H8.5 L19.5 9 C20.3 8.2 20.3 6.8 19.5 6 L18 4.5 C17.2 3.7 15.8 3.7 15 4.5 L4 15.5 Z M13.5 6 L18 10.5</Geometry>
     <Style TargetType="ToolTip">
       <Setter Property="Background" Value="#1B1F28"/><Setter Property="Foreground" Value="#E8EBF2"/>
@@ -1241,7 +1269,12 @@ $ThemeXaml = @'
 
     <Border Grid.Row="2" Grid.Column="2" Background="#14171E" BorderBrush="#222733" BorderThickness="1" CornerRadius="12" Padding="18,16">
       <DockPanel>
-        <TextBlock x:Name="GameTitle" DockPanel.Dock="Top" Text="Pick a game on the left" FontSize="20" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+        <DockPanel DockPanel.Dock="Top">
+          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoPlay}" x:Name="PlayBtn" DockPanel.Dock="Right" Content="Play" IsEnabled="False"
+                  Margin="12,0,0,0" Background="#16A34A" BorderBrush="#22C55E" FontWeight="SemiBold" VerticalAlignment="Center"
+                  ToolTip="Start this game, the same way Pimax Play does (or double-click it in the list)"/>
+          <TextBlock x:Name="GameTitle" Text="Pick a game on the left" FontSize="20" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+        </DockPanel>
         <TextBlock x:Name="GameInfo" DockPanel.Dock="Top" Foreground="#8B93A5" Margin="0,3,0,12" TextWrapping="Wrap"/>
         <StackPanel DockPanel.Dock="Bottom">
           <TextBlock Text="New image: click Find image, paste a link, or browse for a file" Foreground="#B4BCCC" Margin="0,14,0,6"/>
@@ -1285,7 +1318,7 @@ $ThemeXaml = @'
 '@).Replace('__THEME__', $ThemeXaml)
 $window = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $xaml))
 $ui = @{}
-foreach ($n in 'GameList','AddBtn','EditBtn','RefreshBtn','OrderBtn','SettingsBtn','GameTitle','GameInfo','SourceBox','BrowseBtn','PreviewBtn','FindBtn','KeyBtn','ApplyBtn','RestoreBtn','RestartBtn','PreviewImg','NoImage','Status','UpdateBar','UpdateText','UpdateBtn','UpdateClose','VersionLabel','ReportLink','TutorialLink','LibCount','BackupBtn','ResetBar','ResetText','ResetRestore','ResetDismiss','PendingBar','PendingText','PendingApply','PendingDiscard') { $ui[$n] = $window.FindName($n) }
+foreach ($n in 'GameList','PlayBtn','AddBtn','EditBtn','RefreshBtn','OrderBtn','SettingsBtn','GameTitle','GameInfo','SourceBox','BrowseBtn','PreviewBtn','FindBtn','KeyBtn','ApplyBtn','RestoreBtn','RestartBtn','PreviewImg','NoImage','Status','UpdateBar','UpdateText','UpdateBtn','UpdateClose','VersionLabel','ReportLink','TutorialLink','LibCount','BackupBtn','ResetBar','ResetText','ResetRestore','ResetDismiss','PendingBar','PendingText','PendingApply','PendingDiscard') { $ui[$n] = $window.FindName($n) }
 $window.Title = "Pimax Game Manager $AppVersion"
 $window.Add_SourceInitialized({ Set-DarkTitleBar $this })
 
@@ -1413,6 +1446,7 @@ $ui.GameList.Add_SelectionChanged({
     $ui.SourceBox.Text = ''
     foreach ($b in $ui.ApplyBtn, $ui.FindBtn, $ui.BrowseBtn, $ui.PreviewBtn, $ui.SourceBox, $ui.EditBtn) { $b.IsEnabled = $canChange }
     $ui.RestoreBtn.IsEnabled = $canChange
+    $ui.PlayBtn.IsEnabled = [bool](Get-LaunchTarget $g)
     try { Show-Preview $g.Icon; Set-Status $(if ($canChange) { 'Showing the current image.' } else { 'Images can only be changed for imported games.' }) } catch { Set-Status 'Current image could not be loaded.' $true }
 })
 
@@ -2387,11 +2421,30 @@ $ui.EditBtn.Add_Click({
     if ($script:editResult) {
         if ($script:editResult.Keep) { $script:SelectAfterFill = $script:editResult.Keep }
         Fill-List
-        if (-not $ui.GameList.SelectedItem) { $ui.GameTitle.Text = 'Pick a game on the left'; $ui.GameInfo.Text = ''; Show-Preview $null; $ui.EditBtn.IsEnabled = $false }
+        if (-not $ui.GameList.SelectedItem) { $ui.GameTitle.Text = 'Pick a game on the left'; $ui.GameInfo.Text = ''; Show-Preview $null; $ui.EditBtn.IsEnabled = $false; $ui.PlayBtn.IsEnabled = $false }
         Set-Status $script:editResult.Message $script:editResult.Bad
     }
 })
 $ui.EditBtn.IsEnabled = $false
+
+# ---------- Play ----------
+function Invoke-PlaySelected {
+    $g = Selected-Game
+    if (-not $g) { Set-Status 'Pick a game on the left first.' $true; return }
+    try { Start-Game $g; Set-Status "Starting $($g.Name)..." }
+    catch { Set-Status "Couldn't start $($g.Name): $($_.Exception.Message)" $true }
+}
+$ui.PlayBtn.Add_Click({ Invoke-PlaySelected })
+# Double-clicking a game in the list starts it (not double-clicks on the scrollbar or empty space)
+$ui.GameList.Add_MouseDoubleClick({
+    if ($_.ChangedButton -ne 'Left') { return }
+    $el = $_.OriginalSource
+    while ($el -and -not ($el -is [Windows.Controls.ListBoxItem])) {
+        if ($el -is [Windows.Controls.Primitives.ScrollBar]) { return }
+        $el = if ($el -is [Windows.Media.Visual]) { [Windows.Media.VisualTreeHelper]::GetParent($el) } else { $el.Parent }
+    }
+    if ($el) { Invoke-PlaySelected }
+})
 
 # ---------- Backup & restore window ----------
 function Format-SnapshotLine($s) {
@@ -2870,6 +2923,14 @@ if ($Test) {
         $g = $item.Tag
         "  {0,-45} Steam app: {1}" -f $g.Name, (Resolve-SteamAppId $g)
     }
+    "--- Play (launch targets only; nothing is started):"
+    foreach ($item in $ui.GameList.Items) {
+        $g = $item.Tag; $t = Get-LaunchTarget $g
+        $ok = if (-not $t) { 'NO ROUTE' } elseif ($t.Kind -eq 'link' -or (Test-Path -LiteralPath $t.Path)) { 'ok' } else { 'FILE MISSING' }
+        "  {0,-40} {1,-8} {2,-12} {3}" -f $g.Name, $(if ($t) { $t.Kind } else { '-' }), $ok, $(if ($t) { $t.Path })
+    }
+    $ui.GameList.SelectedIndex = 0
+    "  Play button enabled for '$($ui.GameTitle.Text)': $($ui.PlayBtn.IsEnabled)"
     "--- Update check (app version $AppVersion):"
     try {
         $rel = Invoke-RestMethod -UseBasicParsing -Uri $RepoApi -Headers @{ 'User-Agent' = 'pimax-game-manager' }

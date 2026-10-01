@@ -4,7 +4,7 @@
 
 [![Downloads](https://img.shields.io/github/downloads/SFXShannon/pimax-game-manager/total?label=downloads)](https://github.com/SFXShannon/pimax-game-manager/releases) [![Latest release](https://img.shields.io/github/v/release/SFXShannon/pimax-game-manager?label=latest)](https://github.com/SFXShannon/pimax-game-manager/releases/latest) [![License: MIT](https://img.shields.io/github/license/SFXShannon/pimax-game-manager)](LICENSE)
 
-A Windows tool for managing your **Pimax Play** library: add games (one at a time or a whole folder), set custom cover images, arrange the library in any order, edit per-game settings for many games at once, and back it all up so a Pimax update can't wipe your changes.
+A Windows tool for managing your **Pimax Play** library: add games (one at a time or a whole folder), launch them, set custom cover images, arrange the library in any order, edit per-game settings for many games at once, and back it all up so a Pimax update can't wipe your changes.
 
 *Formerly Pimax Cover Changer.*
 
@@ -37,6 +37,16 @@ Adding games, editing or removing them, and changing images don't restart Pimax 
 - **Discard** throws the waiting changes away. Nothing has been written to Pimax Play yet.
 - If you close the app with changes waiting, it asks whether to apply them, throw them away, or keep working.
 - Saving **Library order** or **Game settings**, restoring a backup, **Restart Pimax Play** and updating the app all apply waiting changes in the same restart. Games waiting to be added already appear in Library order and Game settings, so you can place them and set them up before applying.
+
+## Play games
+
+Pick a game and click **Play** (top right), or double-click it in the library list.
+
+- It starts the game the same way Pimax Play does, using the launch path in Pimax's own entry: Steam games through Steam (for example `steam://launch/620980/VR`), and imported and Oculus games from their .exe or shortcut.
+- The game runs as you, not as admin, even though the app itself runs as admin. An .exe is started in its own folder, as it would be from Pimax Play.
+- If the game's .exe has moved, the status line says so. For imported games, point the entry at the new location with **Edit / remove...**.
+
+Which runtime a game uses (Pimax OpenXR or SteamVR) is still set in Pimax Play, not here.
 
 ## Add games
 
@@ -170,6 +180,7 @@ Pimax Play keeps each library entry as a JSON file in `%APPDATA%\Pimax\manifest`
 - copies the chosen image to `%APPDATA%\PimaxGameManager\covers` so it keeps working offline, if the original moves, and if Pimax clears its own folder,
 - backs up the original entry to `%APPDATA%\PimaxGameManager\backups` the first time you change it,
 - adds games by writing a new entry file of the same form Pimax's Import makes (`"source":"pimax_import"`, a random `local.xxxxxxxx` ID, the game's name and the .exe or shortcut to start), and checks the .exe path so a game isn't added twice,
+- launches a game by opening the entry's `route` through Explorer, so it runs as you rather than as admin; for a plain .exe it first writes a small shortcut to `%APPDATA%\PimaxGameManager\launch` that sets the game's folder as its working folder,
 - writes files back as UTF-8 **without a BOM** (Pimax silently drops entries saved with one),
 - restarts Pimax: it stops Pimax Play, the `PiServiceLauncher` service and `PiPlayService.exe` (which holds the library and settings in memory and survives a plain service restart), then starts them again. Game settings are written while Pimax is stopped so it can't overwrite them.
 
@@ -188,13 +199,13 @@ powershell -ExecutionPolicy Bypass -File .\PimaxGameManager.ps1
 
 ```powershell
 Install-Module ps2exe -Scope CurrentUser
-Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.7.3
+Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.8.0
 ```
 
 To build the installer too, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
-& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.7.3 .\PimaxGameManager.iss
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.8.0 .\PimaxGameManager.iss
 ```
 
 The app icon and `assets/logo.png` are generated from the logo shapes used in the app:
