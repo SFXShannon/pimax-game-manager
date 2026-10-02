@@ -1,0 +1,70 @@
+name: Share a Performance setup
+description: Share the game settings that work well on your PC. Once it's approved it shows up for everyone under Performance > Community setups.
+title: "[Setup] "
+labels: ["community-setup"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The easiest way is **Share my setup...** in the app's Performance window: it fills this in for you, with no GitHub account needed.
+        After a quick check the setup is added to the shared list, and everyone's app can load it.
+  - type: dropdown
+    id: game
+    attributes:
+      label: Game
+      options: [ats, ets2, msfs2024, msfs2020, dcs, bms, iracing, ac, ams2, r3e]
+    validations:
+      required: true
+  - type: textarea
+    id: settings
+    attributes:
+      label: Settings
+      description: 'The locked settings as JSON, for example {"r_ssao": "1", "g_traffic": "0.5"}'
+      render: json
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: Graphics card
+      placeholder: "NVIDIA GeForce RTX 4090"
+  - type: input
+    id: cpu
+    attributes:
+      label: Processor
+      placeholder: "Intel Core i9-14900K"
+  - type: input
+    id: ram
+    attributes:
+      label: RAM (GB)
+      placeholder: "64"
+  - type: input
+    id: levels
+    attributes:
+      label: PC levels
+      description: As shown in the app (0 = Entry, 1 = Mid-range, 2 = High-end, 3 = Top-end).
+      placeholder: "gpu=3 cpu=3"
+  - type: input
+    id: headset
+    attributes:
+      label: Headset
+      placeholder: "Pimax Dream Air"
+  - type: input
+    id: scale
+    attributes:
+      label: Pimax render scale
+      placeholder: "0.75"
+  - type: input
+    id: result
+    attributes:
+      label: Result
+      description: How it runs, e.g. "steady 90 on highways, mid 80s in cities".
+  - type: input
+    id: author
+    attributes:
+      label: Name to show
+      description: Leave empty to stay anonymous.
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes

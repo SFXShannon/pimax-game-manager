@@ -37,7 +37,7 @@ try {
     if ((Test-Path $legacyCfg) -and -not (Test-Path $newCfg)) { Copy-Item $legacyCfg $newCfg }
 } catch { }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
-$AppVersion = '1.10.0'
+$AppVersion = '1.11.0'
 $RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-game-manager/releases/latest'
 
 # ---------- Performance: lock game settings, performance cores, window fix, background guard ----------
@@ -2905,10 +2905,18 @@ function Show-Performance([string]$startId) {
           <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoList}" x:Name="OpenLog" Content="Open log" Margin="0,10,0,0" HorizontalAlignment="Left" Padding="10,5"/>
         </StackPanel>
       </Border>
+      <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoPlus}" x:Name="RequestGame" DockPanel.Dock="Bottom" Content="Request a game..." Margin="0,8,0,0"
+              ToolTip="Ask for another game to be added here (no account needed)"/>
       <ListBox x:Name="Targets" Background="#161A21" Foreground="#E8EBF2" BorderBrush="#262C38"/>
     </DockPanel>
     <DockPanel Grid.Column="2">
-      <TextBlock x:Name="Title" DockPanel.Dock="Top" FontSize="18" FontWeight="SemiBold"/>
+      <DockPanel DockPanel.Dock="Top">
+        <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoCopy}" x:Name="Share" DockPanel.Dock="Right" Content="Share my setup..." Margin="8,0,0,0" Padding="10,5"
+                ToolTip="Send your locked settings for this game, with this PC's specs, for others to use (no account needed)"/>
+        <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoDownload}" x:Name="Community" DockPanel.Dock="Right" Content="Community setups..." Padding="10,5"
+                Background="#2A1F3D" BorderBrush="#6D4BB3" ToolTip="Settings other players shared for this game, from PCs like yours first"/>
+        <TextBlock x:Name="Title" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+      </DockPanel>
       <TextBlock x:Name="Info" DockPanel.Dock="Top" Foreground="#8B93A5" TextWrapping="Wrap" Margin="0,2,0,10"/>
       <Border DockPanel.Dock="Top" Background="#14171E" BorderBrush="#222733" BorderThickness="1" CornerRadius="10" Padding="12,10" Margin="0,0,0,10">
         <StackPanel>
@@ -3125,6 +3133,25 @@ function Show-Performance([string]$startId) {
         } catch { & $script:pfSay "Couldn't restore: $($_.Exception.Message)" $true }
     })
     $w.FindName('OpenFile').Add_Click({ if ($script:pfPath) { Start-Process explorer.exe -ArgumentList "/select,`"$($script:pfPath)`"" } })
+    $w.FindName('RequestGame').Add_Click({ try { Show-RequestGame } catch { & $script:pfSay "Couldn't open the request form: $($_.Exception.Message)" $true } })
+    $w.FindName('Share').Add_Click({
+        try { & $script:pfStore } catch { & $script:pfSay $_.Exception.Message $true; return }
+        $pg = Get-PerfGame $script:pfTarget; $e = $script:pfCfg.games[$pg.Id]
+        if (-not $e.values.Count) { & $script:pfSay 'Tick Lock on the settings you want to share first (and test them in the game).' $true; return }
+        try { Show-ShareSetup $pg $e.values } catch { & $script:pfSay "Couldn't share: $($_.Exception.Message)" $true }
+    })
+    $w.FindName('Community').Add_Click({
+        $pg = Get-PerfGame $script:pfTarget
+        try { $s = Show-CommunitySetups $pg } catch { & $script:pfSay "Couldn't load community setups: $($_.Exception.Message)" $true; return }
+        if (-not $s -or $s -is [Windows.Window]) { return }
+        $n = 0; $skipped = 0
+        foreach ($p in $s.values.PSObject.Properties) {
+            $row = $script:pfRows | Where-Object { $_.Def.Key -eq $p.Name } | Select-Object -First 1
+            if ($row -and $row.Check.IsEnabled) { $row.Check.IsChecked = $true; $row.Box.IsEnabled = $true; $row.Box.Text = [string]$p.Value; $n++ } else { $skipped++ }
+        }
+        $script:pfLock.IsChecked = $true; $script:pfDirty = $true
+        & $script:pfSay ("Filled in $n setting(s) from $($s.author)'s setup" + $(if ($null -ne $s.pimaxScale) { " (they use Pimax render scale $($s.pimaxScale) - set that in Game settings)" } else { '' }) + $(if ($skipped) { "; $skipped not in your game file were skipped" } else { '' }) + '. Check them, then Save & apply now.')
+    })
     $w.FindName('OpenLog').Add_Click({ if (-not (Test-Path $PerfLog)) { Write-PerfLog 'Log created' }; Start-Process notepad.exe $PerfLog })
     $w.FindName('Save').Add_Click({ try { & $script:pfSay (& $script:pfSaveAll) } catch { & $script:pfSay $_.Exception.Message $true } })
     $w.FindName('SaveApply').Add_Click({
@@ -3186,6 +3213,188 @@ function Get-PerfIdForGame($game) {
     $id = Get-GameId $game
     if ($id -match '^steam\.app\.(\d+)$' -and $steam.ContainsKey($Matches[1])) { return $steam[$Matches[1]] }
     return $null
+}
+
+
+# ---------- Community setups: share, browse, request a game ----------
+# Shares and requests go through a small Cloudflare Worker that files them as GitHub issues, so nobody
+# needs a GitHub account. A setup is published to community/setups.json only after it's approved.
+$RelayUrl  = 'https://omni-profile-relay.sfxshannon.workers.dev'
+$SetupsUrl = 'https://raw.githubusercontent.com/SFXShannon/pimax-game-manager/main/community/setups.json'
+$IssuesUrl = 'https://github.com/SFXShannon/pimax-game-manager/issues/new'
+
+function Invoke-Relay([string]$path, $obj) {
+    $json = $obj | ConvertTo-Json -Depth 5 -Compress
+    try {
+        return Invoke-RestMethod -Uri ($RelayUrl + $path) -Method Post -Body ([Text.Encoding]::UTF8.GetBytes($json)) -ContentType 'application/json; charset=utf-8' -TimeoutSec 20 -UseBasicParsing
+    } catch {
+        $msg = $null
+        try { $msg = ($_.ErrorDetails.Message | ConvertFrom-Json).error } catch { }
+        if (-not $msg) { $msg = "the sharing service couldn't be reached ($($_.Exception.Message))" }
+        throw $msg
+    }
+}
+function Get-PcLine { $pc = Get-PcProfile; (@($pc.Gpu, $pc.Cpu, $(if ($pc.RamGB) { "$($pc.RamGB) GB RAM" })) | Where-Object { $_ }) -join ', ' }
+
+# Pimax render scale the game uses: its own Pimax setting if it's in the library, otherwise Global
+function Get-PimaxScaleFor([string]$perfId) {
+    try {
+        foreach ($g in Get-PimaxGames) {
+            if ((Get-PerfIdForGame $g) -ne $perfId) { continue }
+            $s = Read-GameSettings (Get-GameId $g)
+            if ($s.Contains('runtime_pixels_per_display_pixel_rate')) { return [double]$s['runtime_pixels_per_display_pixel_rate'] }
+        }
+        $gl = Read-GameSettings 'global'
+        if ($gl.Contains('runtime_pixels_per_display_pixel_rate')) { return [double]$gl['runtime_pixels_per_display_pixel_rate'] }
+    } catch { }
+    return $null
+}
+
+function Show-ShareSetup($pg, $values) {
+    $script:shw = New-DarkWindow "Share my setup - $($pg.Name)" 620 600 @'
+  <DockPanel Margin="18">
+    <TextBlock DockPanel.Dock="Top" x:Name="Intro" TextWrapping="Wrap" Foreground="#B4BCCC" Margin="0,0,0,12"/>
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+      <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoCheck}" x:Name="Send" Content="Send for review" Background="#16A34A" BorderBrush="#22C55E" FontWeight="SemiBold"/>
+      <Button x:Name="Cancel" Content="Cancel" Margin="8,0,0,0"/>
+    </StackPanel>
+    <TextBlock DockPanel.Dock="Bottom" x:Name="Msg" TextWrapping="Wrap" Margin="0,10,0,0"/>
+    <StackPanel>
+      <TextBlock Text="Headset"/><TextBox x:Name="Headset" Margin="0,4,0,10"/>
+      <TextBlock Text="Pimax render scale for this game (leave empty if you don't know)"/><TextBox x:Name="Scale" Margin="0,4,0,10"/>
+      <TextBlock Text="How it runs (e.g. steady 90 on highways, mid 80s in cities)"/><TextBox x:Name="Result" Margin="0,4,0,10"/>
+      <TextBlock Text="Name to show (leave empty to stay anonymous)"/><TextBox x:Name="Author" Margin="0,4,0,10"/>
+      <TextBlock Text="Notes (optional)"/><TextBox x:Name="Notes" Margin="0,4,0,0" Height="70" TextWrapping="Wrap" AcceptsReturn="True" VerticalContentAlignment="Top"/>
+    </StackPanel>
+  </DockPanel>
+'@
+    $w = $script:shw; $script:shPg = $pg; $script:shValues = $values
+    $w.FindName('Intro').Text = "Shares your $($values.Count) locked $($pg.Name) setting(s) and this PC ($(Get-PcLine)). Nothing else is sent: no file paths, no account. After a quick review it shows up for everyone under Community setups."
+    $w.FindName('Headset').Text = [string](Get-AppSetting 'shareHeadset')
+    $sc = Get-PimaxScaleFor $pg.Id; if ($null -ne $sc) { $w.FindName('Scale').Text = $sc.ToString('0.##', $PerfInv) }
+    $w.FindName('Author').Text = [string](Get-AppSetting 'shareAuthor')
+    $w.FindName('Cancel').Add_Click({ $script:shw.Close() })
+    $w.FindName('Send').Add_Click({
+        $w = $script:shw; $msg = $w.FindName('Msg'); $pc = Get-PcProfile
+        $scaleText = $w.FindName('Scale').Text.Trim(); $scale = $null
+        if ($scaleText) { $d = 0.0; if (-not [double]::TryParse($scaleText, [Globalization.NumberStyles]::Float, $PerfInv, [ref]$d)) { $msg.Foreground = '#F87171'; $msg.Text = 'The render scale should be a number like 0.75.'; return }; $scale = $d }
+        $vals = [ordered]@{}; foreach ($k in $script:shValues.Keys) { $vals[$k] = [string]$script:shValues[$k] }
+        $o = [ordered]@{ game = $script:shPg.Id; values = $vals; gpu = $pc.Gpu; cpu = $pc.Cpu; ramGB = $pc.RamGB; gpuTier = $pc.GpuTier; cpuTier = $pc.CpuTier
+                         headset = $w.FindName('Headset').Text.Trim(); pimaxScale = $scale; result = $w.FindName('Result').Text.Trim()
+                         author = $w.FindName('Author').Text.Trim(); notes = $w.FindName('Notes').Text.Trim(); app = $AppVersion }
+        try { Set-AppSetting 'shareHeadset' $o.headset; Set-AppSetting 'shareAuthor' $o.author } catch { }
+        $w.FindName('Send').IsEnabled = $false; $msg.Foreground = '#B4BCCC'; $msg.Text = 'Sending...'
+        $w.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::Background)
+        try {
+            $r = Invoke-Relay '/share-setup' $o
+            $msg.Foreground = '#4ADE80'; $msg.Text = "Thanks! It's waiting for review (#$($r.number)). Once approved, everyone can load it from Community setups."
+            $w.FindName('Send').Content = 'Sent'; $w.FindName('Cancel').Content = 'Close'
+        } catch {
+            $msg.Foreground = '#F87171'; $w.FindName('Send').IsEnabled = $true
+            $msg.Text = "Couldn't send it: $_  You can share it on GitHub instead - opening the form in your browser."
+            $settings = ($vals | ConvertTo-Json -Compress)
+            $url = $IssuesUrl + '?template=community-setup.yml&title=' + [uri]::EscapeDataString("[Setup] $($script:shPg.Name)") + '&game=' + $script:shPg.Id + '&settings=' + [uri]::EscapeDataString($settings) +
+                   '&gpu=' + [uri]::EscapeDataString([string]$pc.Gpu) + '&cpu=' + [uri]::EscapeDataString([string]$pc.Cpu) + '&ram=' + $pc.RamGB + '&levels=' + [uri]::EscapeDataString("gpu=$($pc.GpuTier) cpu=$($pc.CpuTier)") +
+                   '&headset=' + [uri]::EscapeDataString($o.headset) + '&scale=' + [uri]::EscapeDataString($scaleText) + '&result=' + [uri]::EscapeDataString($o.result) + '&author=' + [uri]::EscapeDataString($o.author)
+            try { Start-Process $url } catch { }
+        }
+    })
+    if ($script:Capture -or $Test) { return $w }
+    [void]$w.ShowDialog()
+}
+
+function Show-RequestGame {
+    $script:rqw = New-DarkWindow 'Request a game' 620 600 @'
+  <DockPanel Margin="18">
+    <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="#B4BCCC" Margin="0,0,0,12"
+               Text="Ask for a game to be added to Performance. Games that keep their graphics settings in a file (.ini, .cfg, .xml, .json or .lua) can usually be added. No GitHub account needed."/>
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+      <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoCheck}" x:Name="Send" Content="Send request" Background="#16A34A" BorderBrush="#22C55E" FontWeight="SemiBold"/>
+      <Button x:Name="Cancel" Content="Cancel" Margin="8,0,0,0"/>
+    </StackPanel>
+    <TextBlock DockPanel.Dock="Bottom" x:Name="Msg" TextWrapping="Wrap" Margin="0,10,0,0"/>
+    <StackPanel>
+      <TextBlock Text="Game"/><TextBox x:Name="Game" Margin="0,4,0,10"/>
+      <TextBlock Text="Store link (optional, e.g. its Steam page)"/><TextBox x:Name="Link" Margin="0,4,0,10"/>
+      <TextBlock Text="Where it keeps its graphics settings, if you know (optional)"/><TextBox x:Name="File" Margin="0,4,0,10"/>
+      <TextBlock Text="What would help (which settings matter, what keeps resetting...)"/><TextBox x:Name="Why" Margin="0,4,0,10" Height="70" TextWrapping="Wrap" AcceptsReturn="True" VerticalContentAlignment="Top"/>
+      <TextBlock Text="Name to show (optional)"/><TextBox x:Name="Author" Margin="0,4,0,0"/>
+    </StackPanel>
+  </DockPanel>
+'@
+    $w = $script:rqw
+    $w.FindName('Author').Text = [string](Get-AppSetting 'shareAuthor')
+    $w.FindName('Cancel').Add_Click({ $script:rqw.Close() })
+    $w.FindName('Send').Add_Click({
+        $w = $script:rqw; $msg = $w.FindName('Msg')
+        $game = $w.FindName('Game').Text.Trim()
+        if ($game.Length -lt 2) { $msg.Foreground = '#F87171'; $msg.Text = "Type the game's name."; return }
+        $hs = [string](Get-AppSetting 'shareHeadset')
+        $o = [ordered]@{ game = $game; link = $w.FindName('Link').Text.Trim(); settingsFile = $w.FindName('File').Text.Trim(); why = $w.FindName('Why').Text.Trim()
+                         pc = (Get-PcLine) + $(if ($hs) { ", $hs" } else { '' }); author = $w.FindName('Author').Text.Trim(); app = $AppVersion }
+        if ($o.link -and $o.link -notmatch '^https://') { $msg.Foreground = '#F87171'; $msg.Text = 'The store link should start with https://'; return }
+        $w.FindName('Send').IsEnabled = $false; $msg.Foreground = '#B4BCCC'; $msg.Text = 'Sending...'
+        $w.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::Background)
+        try {
+            $r = Invoke-Relay '/request-game' $o
+            $msg.Foreground = '#4ADE80'; $msg.Text = "Thanks! Your request is #$($r.number) on GitHub. You can follow it there."
+            $w.FindName('Send').Content = 'Sent'; $w.FindName('Cancel').Content = 'Close'
+        } catch {
+            $msg.Foreground = '#F87171'; $w.FindName('Send').IsEnabled = $true
+            $msg.Text = "Couldn't send it: $_  Opening the request form on GitHub instead."
+            $url = $IssuesUrl + '?template=game-request.yml&title=' + [uri]::EscapeDataString("[Game request] $game") + '&game=' + [uri]::EscapeDataString($game) + '&link=' + [uri]::EscapeDataString($o.link) +
+                   '&file=' + [uri]::EscapeDataString($o.settingsFile) + '&why=' + [uri]::EscapeDataString($o.why) + '&pc=' + [uri]::EscapeDataString($o.pc) + '&author=' + [uri]::EscapeDataString($o.author)
+            try { Start-Process $url } catch { }
+        }
+    })
+    if ($script:Capture -or $Test) { return $w }
+    [void]$w.ShowDialog()
+}
+
+# Shared setups for one game, closest PCs first. Picking one fills the Performance rows (nothing is saved until Save).
+function Get-CommunitySetups {
+    $wc = New-Object Net.WebClient; $wc.Headers.Add('User-Agent', 'pimax-game-manager'); $wc.Encoding = [Text.Encoding]::UTF8
+    $raw = $wc.DownloadString($SetupsUrl + '?t=' + [DateTime]::UtcNow.Ticks)
+    return @(($raw | ConvertFrom-Json).setups)
+}
+function Show-CommunitySetups($pg) {
+    $script:csw = New-DarkWindow "Community setups - $($pg.Name)" 820 620 @'
+  <DockPanel Margin="16">
+    <TextBlock DockPanel.Dock="Top" x:Name="Intro" TextWrapping="Wrap" Foreground="#B4BCCC" Margin="0,0,0,10"/>
+    <DockPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
+      <Button x:Name="Close" DockPanel.Dock="Right" Content="Close"/>
+      <TextBlock x:Name="Msg" TextWrapping="Wrap" VerticalAlignment="Center"/>
+    </DockPanel>
+    <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel x:Name="List"/></ScrollViewer>
+  </DockPanel>
+'@
+    $w = $script:csw; $pc = Get-PcProfile; $script:csPicked = $null
+    $w.FindName('Close').Add_Click({ $script:csw.Close() })
+    $list = $w.FindName('List')
+    try { $all = Get-CommunitySetups } catch { $all = $null; $w.FindName('Msg').Foreground = '#F87171'; $w.FindName('Msg').Text = "Couldn't load the shared list: $($_.Exception.Message)" }
+    $mine = @($all | Where-Object { $_.game -eq $pg.Id } | Sort-Object @{ Expression = { $g = if ($null -ne $_.gpuTier) { [Math]::Abs([int]$_.gpuTier - $pc.GpuTier) } else { 3 }; $c = if ($null -ne $_.cpuTier) { [Math]::Abs([int]$_.cpuTier - $pc.CpuTier) } else { 3 }; $g + $c } }, @{ Expression = { $_.date }; Descending = $true })
+    $w.FindName('Intro').Text = $(if ($mine.Count) { "$($mine.Count) shared setup(s) for $($pg.Name), from PCs most like yours ($($PerfTierNames[$pc.GpuTier].ToLower()) graphics, $($PerfTierNames[$pc.CpuTier].ToLower()) processor) first. Use these settings fills them in for you to check; nothing changes until you save." }
+                                 elseif ($null -ne $all) { "No shared setups for $($pg.Name) yet. Be the first: tune it, lock the settings, then click Share my setup." } else { '' })
+    foreach ($s in $mine) {
+        $b = New-Object Windows.Controls.Border; $b.Background = '#14171E'; $b.BorderBrush = '#222733'; $b.BorderThickness = '1'; $b.CornerRadius = '10'; $b.Padding = '14,10'; $b.Margin = '0,0,0,8'
+        $dp = New-Object Windows.Controls.DockPanel
+        $btn = New-Object Windows.Controls.Button; $btn.Content = 'Use these settings'; $btn.Tag = $s; $btn.VerticalAlignment = 'Center'; $btn.Margin = '12,0,0,0'
+        $btn.Background = '#2F6BFF'; $btn.BorderBrush = '#5B8CFF'; [Windows.Controls.DockPanel]::SetDock($btn, 'Right')
+        $btn.Add_Click({ $script:csPicked = $this.Tag; $script:csw.Close() })
+        [void]$dp.Children.Add($btn)
+        $sp = New-Object Windows.Controls.StackPanel
+        $t1 = New-Object Windows.Controls.TextBlock; $t1.FontWeight = 'SemiBold'; $t1.TextWrapping = 'Wrap'
+        $t1.Text = (@($s.gpu, $s.cpu, $(if ($s.ramGB) { "$($s.ramGB) GB" })) | Where-Object { $_ }) -join '  -  '
+        $t2 = New-Object Windows.Controls.TextBlock; $t2.Foreground = '#8B93A5'; $t2.TextWrapping = 'Wrap'; $t2.Margin = '0,2,0,0'
+        $t2.Text = (@($(if ($s.headset) { $s.headset }), $(if ($null -ne $s.pimaxScale) { "Pimax render scale $($s.pimaxScale)" }), "$(@($s.values.PSObject.Properties).Count) settings", "by $($s.author)", $s.date) | Where-Object { $_ }) -join '  -  '
+        [void]$sp.Children.Add($t1); [void]$sp.Children.Add($t2)
+        if ($s.result) { $t3 = New-Object Windows.Controls.TextBlock; $t3.Text = "Result: $($s.result)"; $t3.Foreground = '#4ADE80'; $t3.TextWrapping = 'Wrap'; $t3.Margin = '0,4,0,0'; [void]$sp.Children.Add($t3) }
+        if ($s.notes) { $t4 = New-Object Windows.Controls.TextBlock; $t4.Text = $s.notes; $t4.Foreground = '#C4CAD6'; $t4.TextWrapping = 'Wrap'; $t4.Margin = '0,4,0,0'; [void]$sp.Children.Add($t4) }
+        [void]$dp.Children.Add($sp); $b.Child = $dp; [void]$list.Children.Add($b)
+    }
+    if ($script:Capture -or $Test) { return $w }
+    [void]$w.ShowDialog()
+    return $script:csPicked
 }
 
 $ui.PerfBtn.Add_Click({
@@ -3955,6 +4164,9 @@ if ($Test) {
         $sid = if ($pick) { Get-GameId $pick.Tag } else { 'global' }
         $sw = Show-GameSettings $sid; Save-Shot $sw 'settings'; $sw.Close()
         $pfw = Show-Performance 'ats'; Save-Shot $pfw 'performance'; $pfw.Close()
+        $shw = Show-ShareSetup (Get-PerfGame 'ats') ([ordered]@{ r_ssao = '1'; g_traffic = '0.5' }); Save-Shot $shw 'share-setup'; $shw.Close()
+        $rqw = Show-RequestGame; Save-Shot $rqw 'request-game'; $rqw.Close()
+        $csw = Show-CommunitySetups (Get-PerfGame 'ats'); Save-Shot $csw 'community-setups'; $csw.Close()
         $bw = Show-Backups $null $null; Save-Shot $bw 'backups'; $bw.Close()
         if ($pick) { $script:FinderTerm = 'Crysis'; $fw = Show-Finder $pick.Tag; Save-Shot $fw 'finder'; $fw.Close() }
         $aw = Show-AddGames

@@ -1,0 +1,42 @@
+name: Request a game for Performance
+description: Ask for a game to be added to the Performance window (locked settings, VR starting point).
+title: "[Game request] "
+labels: ["game-request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The easiest way is **Request a game...** in the app's Performance window, with no GitHub account needed.
+        Games that keep their graphics settings in a file (an .ini, .cfg, .xml, .json or .lua) can usually be added.
+  - type: input
+    id: game
+    attributes:
+      label: Game
+      placeholder: "Project CARS 2"
+    validations:
+      required: true
+  - type: input
+    id: link
+    attributes:
+      label: Store link
+      placeholder: "https://store.steampowered.com/app/378860/"
+  - type: input
+    id: file
+    attributes:
+      label: Settings file
+      description: Where the game keeps its graphics settings, if you know. It's often in Documents, Saved Games or AppData.
+      placeholder: 'Documents\Project CARS 2\graphicsconfigdx11vr.xml'
+  - type: textarea
+    id: why
+    attributes:
+      label: What would help
+      description: Which settings matter most, what keeps resetting, or how it runs now.
+  - type: input
+    id: pc
+    attributes:
+      label: PC
+      placeholder: "RTX 4090, i9-14900K, Pimax Dream Air"
+  - type: input
+    id: author
+    attributes:
+      label: Name to show

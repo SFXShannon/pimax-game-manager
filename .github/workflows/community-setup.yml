@@ -1,0 +1,56 @@
+# Adds a shared Performance setup to community/setups.json when the maintainer labels its issue "approved".
+# Only people with triage rights can add labels, so nothing is published without a review.
+name: Add community setup
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: write
+  issues: write
+
+# One at a time (GitHub can deliver the same label event twice), so two runs never race to update the list.
+concurrency:
+  group: community-setups
+  cancel-in-progress: false
+
+jobs:
+  add:
+    if: github.event.label.name == 'approved' && contains(github.event.issue.labels.*.name, 'community-setup')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Add the setup
+        id: add
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          ISSUE_DATE: ${{ github.event.issue.created_at }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: python3 .github/scripts/add_setup.py
+
+      - name: Commit
+        if: steps.add.outputs.ok == 'true'
+        env:
+          GAME: ${{ steps.add.outputs.game }}   # only ever used through an env var, never pasted into the script
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add community/setups.json
+          git commit -m "Community setup: $GAME" || echo "No change"
+          git push
+
+      - name: Close the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ steps.add.outputs.message }}
+        run: |
+          if [ "${{ steps.add.outputs.ok }}" = "true" ]; then
+            gh issue close "${{ github.event.issue.number }}" -R "${{ github.repository }}" -c "$RESULT"
+          else
+            gh issue comment "${{ github.event.issue.number }}" -R "${{ github.repository }}" -b "$RESULT"
+          fi

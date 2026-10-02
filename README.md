@@ -162,6 +162,15 @@ For each game:
 - **Keep the game's desktop window on screen**: if the game opens its desktop window off the edge of the monitor (often where a second screen used to be), it's moved back and made small.
 - **Save** stores your choices; **Save & apply now** also writes the locked settings into the game's file straight away (close the game first).
 
+### Community setups
+
+Settings that work well on one PC are a good starting point for a similar one.
+
+- **Share my setup...** (top right of the Performance window) sends the settings you've locked for the game, with your graphics card, processor, RAM, headset, Pimax render scale and a line on how it runs. Nothing else is sent, and no account is needed: it goes through a small Cloudflare relay that files it as a [GitHub issue](https://github.com/SFXShannon/pimax-game-manager/issues?q=label%3Acommunity-setup). After a quick review it's added to the shared list (`community/setups.json`).
+- **Community setups...** shows the shared setups for the game, from the PCs most like yours first. **Use these settings** fills them in and ticks them; nothing changes until you click **Save** or **Save & apply now**.
+- **Request a game...** (under the game list) asks for another game to be added to Performance, also with no account needed.
+
+If the relay can't be reached, the app opens the same form on GitHub instead, already filled in.
 ### Performance Guard
 
 The locks and the core and window options are carried out by the **Performance Guard**, a small part of the app that runs in the background with a tray icon by the clock. Turn it on with **Run it, and start it with Windows** at the bottom left of the Performance window. It starts at sign-in from a Windows scheduled task (`Pimax Game Manager Performance Guard`), so there's no admin prompt, and it checks about every 3 seconds using almost no CPU.
@@ -244,13 +253,13 @@ Add `-Guard` to run only the Performance Guard.
 
 ```powershell
 Install-Module ps2exe -Scope CurrentUser
-Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.10.0
+Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.11.0
 ```
 
 To build the installer too, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
-& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.10.0 .\PimaxGameManager.iss
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.11.0 .\PimaxGameManager.iss
 ```
 
 The app icon and `assets/logo.png` are generated from the logo shapes used in the app:
