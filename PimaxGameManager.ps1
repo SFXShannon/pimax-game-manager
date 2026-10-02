@@ -227,6 +227,89 @@ function Get-BmsUserCfg {
     foreach ($d in ($dirs | Select-Object -Unique)) { $f = Join-Path $d 'User\Config\Falcon BMS User.cfg'; if (Test-Path -LiteralPath $f) { return $f } }
 }
 
+# Assetto Corsa Competizione: Documents\Assetto Corsa Competizione\Config\menuSettings.json (one line of JSON).
+# The same settings sit under graphicOptions and customGraphicOptions; both are kept in step.
+$AccSettings = @(
+    New-PerfSetting 'pixelDensity' 'Pixel density (VR resolution)' 'Resolution & timing' $null '1 = the headset resolution. Leave at 1 if Pimax sets the resolution.'
+    New-PerfSetting 'resolutionQuality' 'Resolution scale (%)' 'Resolution & timing' @('80', '90', '100', '100') 'Renders below 100% and upscales.'
+    New-PerfSetting 'frameLimit' 'Frame rate limit' 'Resolution & timing' $null 'In VR the headset sets the frame rate.'
+    New-PerfSetting 'isMBlurEnabled' 'Motion blur (1 = on)' 'Graphics (GPU)' '0' 'Blur is uncomfortable in VR.'
+    New-PerfSetting 'shadowQuality' 'Shadows (0-4)' 'Graphics (GPU)' @('1', '2', '2', '3') ''
+    New-PerfSetting 'shadowDistanceQuality' 'Shadow distance (0-4)' 'Graphics (GPU)' @('1', '2', '2', '3') ''
+    New-PerfSetting 'postProcessQuality' 'Post processing (0-4)' 'Graphics (GPU)' @('1', '2', '2', '3') ''
+    New-PerfSetting 'effectsQuality' 'Effects (0-4)' 'Graphics (GPU)' @('1', '2', '2', '3') ''
+    New-PerfSetting 'volumetricFog' 'Volumetric fog (0-3)' 'Graphics (GPU)' @('0', '1', '1', '2') ''
+    New-PerfSetting 'materialsQuality' 'Materials (0-2)' 'Graphics (GPU)' @('0', '1', '1', '2') ''
+    New-PerfSetting 'antiAliasingQuality' 'Anti-aliasing (0-4)' 'Graphics (GPU)' $null ''
+    New-PerfSetting 'mirrorQualityLevel' 'Mirror quality (0-4)' 'World detail (CPU)' @('1', '2', '2', '3') 'Mirrors draw the scene again.'
+    New-PerfSetting 'mirrorDistance' 'Mirror distance' 'World detail (CPU)' @('500', '1000', '1500', '2000') ''
+    New-PerfSetting 'maxCarsVisible' 'Visible cars (setting step)' 'World detail (CPU)' $null 'The step picked in the menu (0 = the game''s default).'
+    New-PerfSetting 'foliageQuality' 'Foliage (0-4)' 'World detail (CPU)' @('1', '2', '2', '3') ''
+    New-PerfSetting 'viewDistanceQuality' 'View distance (0-4)' 'World detail (CPU)' @('1', '2', '2', '3') ''
+)
+
+# Assetto Corsa Rally (Unreal Engine 5): %LOCALAPPDATA%\acr\Saved\Config\Windows\GameUserSettings.ini
+$AcrSettings = @(
+    New-PerfSetting 'ScalabilityGroups/sg.ShadowQuality' 'Shadows (0-3)' 'Graphics (GPU)' @('0', '1', '2', '3') ''
+    New-PerfSetting 'ScalabilityGroups/sg.GlobalIlluminationQuality' 'Global illumination (0-3)' 'Graphics (GPU)' @('0', '1', '2', '3') 'One of the heaviest settings in Unreal Engine 5.'
+    New-PerfSetting 'ScalabilityGroups/sg.ReflectionQuality' 'Reflections (0-3)' 'Graphics (GPU)' @('0', '1', '2', '3') ''
+    New-PerfSetting 'ScalabilityGroups/sg.PostProcessQuality' 'Post processing (0-3)' 'Graphics (GPU)' @('0', '1', '2', '3') ''
+    New-PerfSetting 'ScalabilityGroups/sg.EffectsQuality' 'Effects (0-3)' 'Graphics (GPU)' @('0', '1', '2', '3') ''
+    New-PerfSetting 'ScalabilityGroups/sg.ShadingQuality' 'Shading (0-3)' 'Graphics (GPU)' @('1', '2', '2', '3') ''
+    New-PerfSetting 'ScalabilityGroups/sg.AntiAliasingQuality' 'Anti-aliasing (0-3)' 'Graphics (GPU)' $null ''
+    New-PerfSetting 'ScalabilityGroups/sg.TextureQuality' 'Textures (0-3)' 'Graphics (GPU)' $null 'Uses video memory more than speed.'
+    New-PerfSetting 'ScalabilityGroups/sg.ViewDistanceQuality' 'View distance (0-3)' 'World detail (CPU)' @('1', '2', '2', '3') ''
+    New-PerfSetting 'ScalabilityGroups/sg.FoliageQuality' 'Foliage (0-3)' 'World detail (CPU)' @('0', '1', '2', '3') ''
+    New-PerfSetting 'ScalabilityGroups/sg.LandscapeQuality' 'Landscape (0-3)' 'World detail (CPU)' @('1', '2', '2', '3') ''
+    New-PerfSetting '/Script/dmengine.DMGameUserSettings/FrameRateLimit' 'Frame rate limit' 'Resolution & timing' $null 'In VR the headset sets the frame rate.'
+)
+
+# Crysis VR mod: Documents\My Games\Crysis\game.cfg  (sys_spec 1 = low ... 4 = very high)
+$CrysisSettings = @(
+    New-PerfSetting 'vr_resolution_scale' 'VR resolution scale' 'Resolution & timing' $null '1 = the headset resolution.'
+    New-PerfSetting 'vr_mirror_eye' 'Desktop mirror (0 = off)' 'Desktop window' $null 'Skipping the desktop view saves a little GPU time.'
+    New-PerfSetting 'sys_spec_shadows' 'Shadows (1-4)' 'Graphics (GPU)' @('1', '2', '3', '3') ''
+    New-PerfSetting 'sys_spec_shading' 'Shading (1-4)' 'Graphics (GPU)' @('2', '2', '3', '3') ''
+    New-PerfSetting 'sys_spec_postprocessing' 'Post processing (1-4)' 'Graphics (GPU)' @('1', '2', '2', '3') ''
+    New-PerfSetting 'sys_spec_motionblur' 'Motion blur (1-4)' 'Graphics (GPU)' '1' 'Blur is uncomfortable in VR.'
+    New-PerfSetting 'sys_spec_volumetriceffects' 'Volumetric effects (1-4)' 'Graphics (GPU)' @('1', '2', '3', '3') ''
+    New-PerfSetting 'sys_spec_water' 'Water (1-4)' 'Graphics (GPU)' @('1', '2', '3', '3') ''
+    New-PerfSetting 'sys_spec_particles' 'Particles (1-4)' 'Graphics (GPU)' @('1', '2', '3', '3') ''
+    New-PerfSetting 'sys_spec_texture' 'Textures (1-4)' 'Graphics (GPU)' $null ''
+    New-PerfSetting 'sys_spec_objectdetail' 'Object detail (1-4)' 'World detail (CPU)' @('2', '2', '3', '3') ''
+    New-PerfSetting 'sys_spec_gameeffects' 'Game effects (1-4)' 'World detail (CPU)' @('2', '2', '3', '3') ''
+    New-PerfSetting 'sys_spec_physics' 'Physics (1-4)' 'World detail (CPU)' @('2', '2', '3', '3') ''
+)
+
+# Skyrim VR: SkyrimPrefs.ini. With Mod Organizer 2 (Wabbajack lists) the game uses the profile's copy, not Documents.
+$SkyrimSettings = @(
+    New-PerfSetting 'VRDisplay/fRenderTargetSizeMultiplier' 'Render target size' 'Resolution & timing' $null '1.0 = the headset resolution.'
+    New-PerfSetting 'Display/fShadowDistance' 'Shadow distance' 'Graphics (GPU)' @('2000.0000', '3000.0000', '4000.0000', '5000.0000') ''
+    New-PerfSetting 'Display/iShadowMapResolution' 'Shadow resolution' 'Graphics (GPU)' @('1024', '2048', '2048', '4096') ''
+    New-PerfSetting 'Display/bShadowsOnGrass' 'Shadows on grass (1 = on)' 'Graphics (GPU)' @('0', '0', '1', '1') ''
+    New-PerfSetting 'Display/iReflectionResolutionDivider' 'Water reflection divider (higher = cheaper)' 'Graphics (GPU)' @('4', '2', '2', '1') ''
+    New-PerfSetting 'Imagespace/bDoDepthOfField' 'Depth of field (1 = on)' 'Graphics (GPU)' '0' 'Blurs things in VR.'
+    New-PerfSetting 'Grass/fGrassStartFadeDistance' 'Grass distance' 'World detail (CPU)' @('2000.0000', '3000.0000', '3500.0000', '5000.0000') ''
+    New-PerfSetting 'TerrainManager/fBlockLevel0Distance' 'Terrain detail distance' 'World detail (CPU)' $null ''
+    New-PerfSetting 'Particles/iMaxDesired' 'Particles' 'World detail (CPU)' @('750', '1000', '1500', '2000') ''
+    New-PerfSetting 'Display/iMaxDecalsPerFrame' 'Decals per frame' 'World detail (CPU)' @('50', '100', '100', '150') ''
+)
+function Get-SkyrimVrPrefs {
+    # Mod Organizer 2: find a ModOrganizer.ini for Skyrim VR (top two folder levels of each drive) and use its selected profile
+    foreach ($dr in [IO.DriveInfo]::GetDrives() | Where-Object { $_.DriveType -eq 'Fixed' -and $_.IsReady }) {
+        foreach ($ini in @(Get-ChildItem $dr.RootDirectory.FullName -Directory -ErrorAction SilentlyContinue | ForEach-Object { Get-ChildItem $_.FullName -Filter ModOrganizer.ini -Depth 1 -File -ErrorAction SilentlyContinue })) {
+            $t = [IO.File]::ReadAllText($ini.FullName)
+            if ($t -notmatch '(?m)^gameName=Skyrim VR') { continue }
+            if ($t -match '(?m)^selected_profile=(?:@ByteArray\()?(.*?)\)?\s*$') {
+                $f = Join-Path $ini.DirectoryName ("profiles\" + $Matches[1] + "\skyrimprefs.ini")
+                if (Test-Path -LiteralPath $f) { return $f }
+            }
+        }
+    }
+    $d = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'My Games\Skyrim VR\SkyrimPrefs.ini'
+    if (Test-Path -LiteralPath $d) { return $d }
+}
+
 $Docs = [Environment]::GetFolderPath('MyDocuments')
 $PerfGames = @(
     [pscustomobject]@{ Id = 'ats'; Name = 'American Truck Simulator'; Process = 'amtrucks'; RouteMatch = '\\amtrucks\.exe|steam://\w+/270880\b'; Format = 'scs'; Settings = $ScsSettings
@@ -251,6 +334,14 @@ $PerfGames = @(
                        Configs = @(Join-Path $Docs 'Automobilista 2\graphicsconfigdx11.xml') }
     [pscustomobject]@{ Id = 'r3e'; Name = 'RaceRoom Racing Experience'; Process = 'RRRE64'; RouteMatch = 'RaceRoom|steam://\w+/211500\b'; Format = 'xmltag'; Settings = $R3eSettings
                        Configs = @(Join-Path $Docs 'My Games\SimBin\RaceRoom Racing Experience\UserData\graphics_options.xml') }
+    [pscustomobject]@{ Id = 'acc'; Name = 'Assetto Corsa Competizione'; Process = 'AC2-Win64-Shipping'; RouteMatch = 'Assetto Corsa Competizione|AC2-Win64|steam://\w+/805550\b'; Format = 'json'; Settings = $AccSettings
+                       JsonParents = @('graphicOptions', 'customGraphicOptions'); Configs = @(Join-Path $Docs 'Assetto Corsa Competizione\Config\menuSettings.json') }
+    [pscustomobject]@{ Id = 'acr'; Name = 'Assetto Corsa Rally'; Process = @('acr', 'acr-Win64-Shipping'); RouteMatch = 'Assetto Corsa Rally|\\acr\.exe'; Format = 'ini'; Settings = $AcrSettings
+                       Configs = @(Join-Path $env:LOCALAPPDATA 'acr\Saved\Config\Windows\GameUserSettings.ini') }
+    [pscustomobject]@{ Id = 'crysisvr'; Name = 'Crysis VR'; Process = 'CrysisVR'; RouteMatch = 'CrysisVR\.exe'; Format = 'ini'; Settings = $CrysisSettings
+                       Configs = @(Join-Path $Docs 'My Games\Crysis\game.cfg') }
+    [pscustomobject]@{ Id = 'skyrimvr'; Name = 'Skyrim VR'; Process = 'SkyrimVR'; RouteMatch = 'SkyrimVR|steam://\w+/611670\b'; Format = 'ini'; Settings = $SkyrimSettings
+                       Configs = @({ Get-SkyrimVrPrefs }) }
 )
 
 # ---- This PC: graphics card, processor and memory, sorted into 4 levels so suggestions fit the hardware ----
@@ -289,7 +380,99 @@ function Get-PerfRec($def, [int]$gpuTier, [int]$cpuTier) {
     return $r
 }
 
-function Get-PerfGame([string]$id) { $PerfGames | Where-Object { $_.Id -eq $id } | Select-Object -First 1 }
+
+# JSON settings files (Assetto Corsa Competizione, and games added by hand) can be one long line,
+# so they are scanned as text: every plain value is found with its Section/Key path and exact position.
+try {
+    Add-Type -ErrorAction Stop -TypeDefinition @'
+using System; using System.Collections.Generic; using System.Text;
+namespace PGMPerfJson {
+  public class Item { public string Path; public int Start; public int Length; public string Raw; }
+  public static class Scanner {
+    public static List<Item> Scan(string s) {
+      var items = new List<Item>(); var stack = new List<string>(); string pendingKey = null; int i = 0, n = s.Length;
+      var inArray = new List<bool>();
+      while (i < n) {
+        char c = s[i];
+        if (c == '"') {
+          int start = i; i++; var sb = new StringBuilder();
+          while (i < n && s[i] != '"') { if (s[i] == '\\' && i + 1 < n) { sb.Append(s[i + 1]); i += 2; } else { sb.Append(s[i]); i++; } }
+          i++; int j = i; while (j < n && char.IsWhiteSpace(s[j])) j++;
+          bool arr = inArray.Count > 0 && inArray[inArray.Count - 1];
+          if (j < n && s[j] == ':' && !arr) { pendingKey = sb.ToString(); i = j + 1; continue; }
+          if (pendingKey != null) { items.Add(new Item { Path = Join(stack, pendingKey), Start = start, Length = i - start, Raw = s.Substring(start, i - start) }); pendingKey = null; }
+          continue;
+        }
+        if (c == '{' || c == '[') { stack.Add(pendingKey ?? ""); inArray.Add(c == '['); pendingKey = null; i++; continue; }
+        if (c == '}' || c == ']') { if (stack.Count > 0) { stack.RemoveAt(stack.Count - 1); inArray.RemoveAt(inArray.Count - 1); } pendingKey = null; i++; continue; }
+        if (c == ',' || char.IsWhiteSpace(c) || c == ':') { i++; continue; }
+        int st = i; while (i < n && ",}] \t\r\n".IndexOf(s[i]) < 0) i++;
+        if (pendingKey != null) { items.Add(new Item { Path = Join(stack, pendingKey), Start = st, Length = i - st, Raw = s.Substring(st, i - st) }); pendingKey = null; }
+      }
+      return items;
+    }
+    static string Join(List<string> stack, string key) {
+      var parts = new List<string>(); foreach (var p in stack) if (p.Length > 0) parts.Add(p); parts.Add(key); return string.Join("/", parts);
+    }
+  }
+}
+'@
+} catch { }
+
+# For JSON games that keep the same settings in several places (ACC: graphicOptions and customGraphicOptions),
+# a setting's key is its name and every copy under those sections is read and written together.
+function Get-PerfJsonItems($pg, [string]$text) {
+    $out = New-Object System.Collections.Generic.List[object]
+    foreach ($it in [PGMPerfJson.Scanner]::Scan($text)) {
+        $key = $it.Path
+        if ($pg.JsonParents) {
+            $parent = ($it.Path -split '/')[0]; $leaf = ($it.Path -split '/')[-1]
+            if ($pg.JsonParents -notcontains $parent -or ($it.Path -split '/').Count -ne 2) { continue }
+            $key = $leaf
+        }
+        $out.Add([pscustomobject]@{ Key = $key; Start = $it.Start; Length = $it.Length; Raw = $it.Raw; Parent = ($it.Path -split '/')[0] })
+    }
+    return $out
+}
+function ConvertFrom-JsonRaw([string]$raw) { if ($raw -match '^"(.*)"$') { return $Matches[1] }; return $raw }
+function ConvertTo-JsonRaw([string]$v, [string]$old) {
+    if ($old -match '^".*"$') { return '"' + ($v -replace '\\', '\\' -replace '"', '\"') + '"' }
+    if ($v -match '^(-?\d+(\.\d+)?([eE][-+]?\d+)?|true|false|null)$') { return $v }
+    return '"' + $v + '"'
+}
+
+# Guesses a settings file's format from its name and contents (for games added by hand)
+function Get-PerfFormatGuess([string]$path) {
+    $ext = [IO.Path]::GetExtension($path).ToLower()
+    $t = ''; try { $t = (Read-TextKeep $path).Text } catch { return $null }
+    if ($ext -eq '.json' -or $t.TrimStart().StartsWith('{') -and $t -match '"\s*:') { return 'json' }
+    if ($ext -eq '.lua') { return 'lua' }
+    if ($ext -eq '.xml') { if ($t -match '<prop name="') { return 'xmlattr' } else { return 'xmltag' } }
+    if ($t -match '(?m)^uset\s') { return 'scs' }
+    if ($t -match '(?m)^\s*set\s+\S+\s+\S') { return 'bms' }
+    if ($ext -eq '.opt' -or $t -match '(?m)^\{\w') { return 'msfs' }
+    if ($t -match '(?m)^\s*[^=;#\[\s][^=]*=') { return 'ini' }
+    if ($t -match '(?m)^\S+[ \t]+\S') { return 'msfs' }   # "key value" lines, as in X-Plane's .prf files
+    return $null
+}
+$PerfFormatNames = @{ json = 'JSON'; lua = 'Lua table'; xmlattr = 'XML (attributes)'; xmltag = 'XML'; scs = 'SCS config'; bms = 'BMS config'; msfs = 'key value lines'; ini = 'INI (key = value)' }
+
+# Games added by hand: stored in performance.json under "custom"
+function Get-CustomPerfGames {
+    $t = if (Test-Path -LiteralPath $PerfFile) { (Get-Item -LiteralPath $PerfFile).LastWriteTimeUtc } else { [datetime]::MinValue }
+    if ($script:PerfCustomTime -eq $t -and $null -ne $script:PerfCustom) { return $script:PerfCustom }
+    $list = @()
+    foreach ($c in @((Read-PerfConfig).custom)) {
+        if (-not $c -or -not $c.id) { continue }
+        $list += [pscustomobject]@{ Id = [string]$c.id; Name = [string]$c.name; Process = [string]$c.process; Format = [string]$c.format; Settings = @()
+                                    Configs = @([string]$c.path); RouteMatch = '\\' + [regex]::Escape([string]$c.process) + '\.exe'; Custom = $true }
+    }
+    $script:PerfCustom = $list; $script:PerfCustomTime = $t
+    return $list
+}
+function Get-AllPerfGames { @($PerfGames) + @(Get-CustomPerfGames) }
+function Get-PerfGame([string]$id) { Get-AllPerfGames | Where-Object { $_.Id -eq $id } | Select-Object -First 1 }
+
 # Where a game keeps its settings file (some are found by a small search, done once per run)
 $script:PerfPathCache = @{}
 function Get-PerfConfigPath($pg) {
@@ -317,11 +500,12 @@ function Write-PerfLog([string]$msg) {
 
 # performance.json: { guard: true/false, games: { <id>: { lock, values{key:value}, pinCores, keepWindow } } }
 function Read-PerfConfig {
-    $cfg = [pscustomobject]@{ guard = $false; games = [ordered]@{} }
+    $cfg = [pscustomobject]@{ guard = $false; games = [ordered]@{}; custom = @() }
     if (Test-Path -LiteralPath $PerfFile) {
         try {
             $j = [IO.File]::ReadAllText($PerfFile).TrimStart([char]0xFEFF) | ConvertFrom-Json
             $cfg.guard = [bool]$j.guard
+            $cfg.custom = @($j.custom | Where-Object { $_ -and $_.id })
             foreach ($p in @($j.games.PSObject.Properties)) {
                 $vals = [ordered]@{}
                 foreach ($v in @($p.Value.values.PSObject.Properties)) { $vals[$v.Name] = [string]$v.Value }
@@ -334,7 +518,7 @@ function Read-PerfConfig {
 function Save-PerfConfig($cfg) {
     $games = [ordered]@{}
     foreach ($k in $cfg.games.Keys) { $g = $cfg.games[$k]; $games[$k] = [ordered]@{ lock = [bool]$g.lock; pinCores = [bool]$g.pinCores; keepWindow = [bool]$g.keepWindow; values = $g.values } }
-    $json = [ordered]@{ guard = [bool]$cfg.guard; games = $games } | ConvertTo-Json -Depth 6
+    $json = [ordered]@{ guard = [bool]$cfg.guard; games = $games; custom = @($cfg.custom) } | ConvertTo-Json -Depth 6
     [IO.File]::WriteAllText($PerfFile, $json, $Utf8NoBom)
 }
 function Get-PerfEntry($cfg, [string]$id) {
@@ -406,6 +590,14 @@ function ConvertTo-PerfRaw($pg, [string]$v, [string]$old) {
 function Read-PerfValues($pg, [string]$path) {
     $vals = @{}
     $files = @(); if ($pg.BaseConfig -and (Test-Path -LiteralPath (& $pg.BaseConfig $path))) { $files += (& $pg.BaseConfig $path) }; $files += $path
+    if ($pg.Format -eq 'json') {
+        $rank = @{}
+        foreach ($it in (Get-PerfJsonItems $pg (Read-TextKeep $path).Text)) {
+            $r = if ($pg.JsonParents) { [array]::IndexOf(@($pg.JsonParents), $it.Parent) } else { 0 }
+            if (-not $rank.ContainsKey($it.Key) -or $r -lt $rank[$it.Key]) { $vals[$it.Key] = ConvertFrom-JsonRaw $it.Raw; $rank[$it.Key] = $r }
+        }
+        return $vals
+    }
     foreach ($f in $files) {
         $p = Split-PerfLines $pg (Read-TextKeep $f).Text
         foreach ($it in $p.Items) { $vals[$it.Key] = (ConvertFrom-PerfRaw $pg $it.Val) }
@@ -417,6 +609,24 @@ function Read-PerfValues($pg, [string]$path) {
 # Formats where a missing line is fine to add (the game reads it like any other) get it appended.
 function Set-PerfValues($pg, [string]$path, $want, [switch]$WhatIf) {
     $doc = Read-TextKeep $path
+    if ($pg.Format -eq 'json') {
+        $text = $doc.Text; $changes = New-Object System.Collections.Generic.List[string]; $edits = @()
+        foreach ($it in (Get-PerfJsonItems $pg $text)) {
+            if (-not $want.Contains($it.Key)) { continue }
+            $old = ConvertFrom-JsonRaw $it.Raw; $v = [string]$want[$it.Key]
+            if ($old -ne $v) { $edits += [pscustomobject]@{ Start = $it.Start; Length = $it.Length; New = (ConvertTo-JsonRaw $v $it.Raw) }; if (-not ($changes | Where-Object { $_ -like "$($it.Key) *" })) { $changes.Add("$($it.Key) $old->$v") } }
+        }
+        foreach ($e in ($edits | Sort-Object Start -Descending)) { $text = $text.Substring(0, $e.Start) + $e.New + $text.Substring($e.Start + $e.Length) }
+        if ($changes.Count -and -not $WhatIf) {
+            $dir = Join-Path $PerfBackupDir $pg.Id
+            if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force $dir | Out-Null }
+            if (-not (Get-PerfOriginal $pg)) { Copy-Item -LiteralPath $path (Join-Path $dir ('original-' + [IO.Path]::GetFileName($path))) }
+            Copy-Item -LiteralPath $path (Join-Path $dir ("{0:yyyyMMdd-HHmmss}-{1}" -f (Get-Date), [IO.Path]::GetFileName($path)))
+            Get-ChildItem $dir -File | Where-Object { $_.Name -notlike 'original-*' } | Sort-Object LastWriteTime -Descending | Select-Object -Skip 20 | Remove-Item -ErrorAction SilentlyContinue
+            Write-TextKeep $path $doc $text
+        }
+        return $changes.ToArray()
+    }
     $p = Split-PerfLines $pg $doc.Text
     $lines = $p.Lines; $changes = New-Object System.Collections.Generic.List[string]; $seen = @{}
     foreach ($it in $p.Items) {
@@ -2889,7 +3099,7 @@ $ui.SettingsBtn.Add_Click({
 
 # ---------- Performance window ----------
 function Show-Performance([string]$startId) {
-    $script:pw2 = New-DarkWindow 'Performance' 1180 760 @'
+    $script:pw2 = New-DarkWindow 'Performance' 1180 840 @'
   <Grid Margin="14">
     <Grid.ColumnDefinitions><ColumnDefinition Width="320"/><ColumnDefinition Width="14"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
     <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
@@ -2905,6 +3115,8 @@ function Show-Performance([string]$startId) {
           <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoList}" x:Name="OpenLog" Content="Open log" Margin="0,10,0,0" HorizontalAlignment="Left" Padding="10,5"/>
         </StackPanel>
       </Border>
+      <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoFolder}" x:Name="AddCustom" DockPanel.Dock="Bottom" Content="Add your own game..." Margin="0,8,0,0"
+              ToolTip="Any game that keeps its settings in a text file: pick its .exe and that file"/>
       <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoPlus}" x:Name="RequestGame" DockPanel.Dock="Bottom" Content="Request a game..." Margin="0,8,0,0"
               ToolTip="Ask for another game to be added here (no account needed)"/>
       <ListBox x:Name="Targets" Background="#161A21" Foreground="#E8EBF2" BorderBrush="#262C38"/>
@@ -2950,6 +3162,11 @@ function Show-Performance([string]$startId) {
                   ToolTip="Open the folder with the game's settings file"/>
         </StackPanel>
       </DockPanel>
+      <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+        <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoTrash}" x:Name="RemoveCustom" DockPanel.Dock="Right" Content="Remove this game" Margin="8,0,0,0" Padding="10,5" Visibility="Collapsed"/>
+        <TextBlock Text="Find a setting:" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="#8B93A5"/>
+        <TextBox x:Name="Filter" ToolTip="Show only settings whose name contains this text"/>
+      </DockPanel>
       <ScrollViewer VerticalScrollBarVisibility="Auto"><Grid x:Name="Rows" Margin="0,0,8,0"/></ScrollViewer>
     </DockPanel>
     <TextBlock x:Name="Status" Grid.Row="1" Grid.ColumnSpan="3" Margin="0,10,0,0" Foreground="#4ADE80" TextWrapping="Wrap"
@@ -2976,16 +3193,22 @@ function Show-Performance([string]$startId) {
     $script:pfTier.ToolTip = 'Recommended for VR uses lighter settings for less powerful PCs. Graphics settings follow the graphics card, world detail follows the processor. Pick a level to override what was detected.'
     $script:pfTiers = { $s = $script:pfTier.SelectedItem.Tag; return @([int]$s[0], [int]$s[1]) }
 
-    foreach ($pg in ($PerfGames | Sort-Object @{ Expression = { if (Get-PerfConfigPath $_) { 0 } else { 1 } } }, @{ Expression = { [array]::IndexOf($PerfGames, $_) } })) {
-        $it = New-Object Windows.Controls.ListBoxItem; $it.Tag = $pg.Id; $it.Padding = '6,6'
-        [void]$script:pfTargets.Items.Add($it)
+    # Built-in games first (installed ones before the rest), then games added by hand
+    $script:pfFill = {
+        $script:pfSwitching = $true; $script:pfTargets.Items.Clear(); $script:pfSwitching = $false
+        $all = @(Get-AllPerfGames)
+        foreach ($pg in ($all | Sort-Object @{ Expression = { if ($_.Custom) { 1 } else { 0 } } }, @{ Expression = { if (Get-PerfConfigPath $_) { 0 } else { 1 } } }, @{ Expression = { [array]::IndexOf($all, $_) } })) {
+            $it = New-Object Windows.Controls.ListBoxItem; $it.Tag = $pg.Id; $it.Padding = '6,6'
+            [void]$script:pfTargets.Items.Add($it)
+        }
     }
+    & $script:pfFill
     $script:pfMarks = {
         foreach ($it in $script:pfTargets.Items) {
             $pg = Get-PerfGame ([string]$it.Tag); $path = Get-PerfConfigPath $pg
             $e = if ($script:pfCfg.games.Contains($pg.Id)) { $script:pfCfg.games[$pg.Id] } else { $null }
             $on = $e -and ($e.lock -or $e.pinCores -or $e.keepWindow)
-            $it.Content = $pg.Name + $(if ($on) { '   *' } else { '' }) + $(if (-not $path) { '   (not installed)' } else { '' })
+            $it.Content = $pg.Name + $(if ($pg.Custom) { '   (added by you)' } else { '' }) + $(if ($on) { '   *' } else { '' }) + $(if (-not $path) { $(if ($pg.Custom) { '   (file missing)' } else { '   (not installed)' }) } else { '' })
             $it.Foreground = $(if (-not $path) { '#6B7385' } else { '#E8EBF2' })
             $it.ToolTip = $(if (-not $path) { 'Its settings file was not found on this PC' } elseif ($on) { 'Performance options are on' } else { '' })
         }
@@ -3018,12 +3241,14 @@ function Show-Performance([string]$startId) {
                                    else { "Not needed on this PC: all its CPU cores are the same type." })
         $script:pfRowsGrid.Children.Clear(); $script:pfRowsGrid.RowDefinitions.Clear(); $script:pfRowsGrid.ColumnDefinitions.Clear()
         foreach ($cw in 70, 280, 150, '*') { $cd = New-Object Windows.Controls.ColumnDefinition; $cd.Width = $(if ($cw -eq '*') { New-Object Windows.GridLength(1, 'Star') } else { New-Object Windows.GridLength($cw) }); $script:pfRowsGrid.ColumnDefinitions.Add($cd) }
-        $script:pfRows = @(); $r = 0; $lastGroup = $null
-        foreach ($def in $pg.Settings) {
+        $script:pfRows = @(); $script:pfHeaders = @(); $r = 0; $lastGroup = $null
+        # Games added by hand list everything in their file (plus anything locked that isn't in it any more)
+        $defs = if ($pg.Custom) { @(@($cur.Keys) + @($e.values.Keys) | Sort-Object -Unique | ForEach-Object { New-PerfSetting $_ $_ 'All settings' $null '' }) } else { $pg.Settings }
+        foreach ($def in $defs) {
             if ($def.Group -ne $lastGroup) {
                 $script:pfRowsGrid.RowDefinitions.Add((New-Object Windows.Controls.RowDefinition))
                 $h = New-Object Windows.Controls.TextBlock; $h.Text = $def.Group.ToUpper(); $h.Foreground = '#5B8CFF'; $h.FontSize = 11; $h.FontWeight = 'SemiBold'; $h.Margin = $(if ($r) { '0,14,0,4' } else { '0,0,0,4' })
-                [Windows.Controls.Grid]::SetRow($h, $r); [Windows.Controls.Grid]::SetColumnSpan($h, 4); [void]$script:pfRowsGrid.Children.Add($h)
+                [Windows.Controls.Grid]::SetRow($h, $r); [Windows.Controls.Grid]::SetColumnSpan($h, 4); [void]$script:pfRowsGrid.Children.Add($h); $script:pfHeaders += $h
                 $r++; $lastGroup = $def.Group
             }
             $script:pfRowsGrid.RowDefinitions.Add((New-Object Windows.Controls.RowDefinition))
@@ -3044,12 +3269,17 @@ function Show-Performance([string]$startId) {
             $cb.IsEnabled = [bool]$path -and ($has -or $pg.Format -eq 'scs')
             $cb.Add_Click({ $this.Tag.Box.IsEnabled = [bool]$this.IsChecked; if (-not $script:pfLoading) { $script:pfDirty = $true } })
             $tb.Add_TextChanged({ if (-not $script:pfLoading) { $script:pfDirty = $true } })
-            $row.Check = $cb; $row.Box = $tb
+            $row.Check = $cb; $row.Box = $tb; $row | Add-Member -NotePropertyName Els -NotePropertyValue @($cb, $lbl, $tb, $hint) -Force
             $col = 0
             foreach ($el in $cb, $lbl, $tb, $hint) { [Windows.Controls.Grid]::SetRow($el, $r); [Windows.Controls.Grid]::SetColumn($el, $col); [void]$script:pfRowsGrid.Children.Add($el); $col++ }
             $script:pfRows += $row; $r++
         }
         foreach ($b in 'Recommend', 'UseCurrent', 'OpenFile', 'SaveApply') { $script:pw2.FindName($b).IsEnabled = [bool]$path }
+        foreach ($b in 'Share', 'Community') { $script:pw2.FindName($b).IsEnabled = -not $pg.Custom; $script:pw2.FindName($b).ToolTip = $(if ($pg.Custom) { 'Sharing is for the games built into the app. Use Request a game to get this one added.' } else { $null }) }
+        $script:pw2.FindName('Recommend').IsEnabled = [bool]$path -and -not $pg.Custom
+        $script:pw2.FindName('RemoveCustom').Visibility = $(if ($pg.Custom) { 'Visible' } else { 'Collapsed' })
+        if ($pg.Custom -and $path) { $script:pfInfo.Text += "  (read as $($PerfFormatNames[$pg.Format]), $($cur.Count) settings)" }
+        & $script:pfApplyFilter
         $orig = Get-PerfOriginal $pg
         $rb = $script:pw2.FindName('Restore'); $rb.IsEnabled = [bool]($path -and $orig)
         $rb.ToolTip = $(if ($orig) { "Put the file back as it was on $($orig.LastWriteTime.ToString('g')), before this app first changed it, and stop locking it - handy to compare before and after" } else { 'Nothing to restore: this app hasn''t changed this game''s file yet' })
@@ -3133,6 +3363,39 @@ function Show-Performance([string]$startId) {
         } catch { & $script:pfSay "Couldn't restore: $($_.Exception.Message)" $true }
     })
     $w.FindName('OpenFile').Add_Click({ if ($script:pfPath) { Start-Process explorer.exe -ArgumentList "/select,`"$($script:pfPath)`"" } })
+    # Find a setting: hides rows whose name or key doesn't contain the text
+    $script:pfApplyFilter = {
+        $q = $script:pw2.FindName('Filter').Text.Trim()
+        foreach ($row in $script:pfRows) {
+            $show = (-not $q) -or $row.Def.Label -like "*$q*" -or $row.Def.Key -like "*$q*"
+            foreach ($el in $row.Els) { $el.Visibility = $(if ($show) { 'Visible' } else { 'Collapsed' }) }
+        }
+        foreach ($h in $script:pfHeaders) { $h.Visibility = $(if ($q) { 'Collapsed' } else { 'Visible' }) }
+    }
+    $w.FindName('Filter').Add_TextChanged({ & $script:pfApplyFilter })
+    $w.FindName('AddCustom').Add_Click({
+        try { & $script:pfStore } catch { }
+        try { $id = Show-AddCustomGame } catch { & $script:pfSay "Couldn't add the game: $($_.Exception.Message)" $true; return }
+        if (-not $id -or $id -is [Windows.Window]) { return }
+        $keep = $script:pfCfg; $script:pfCfg = Read-PerfConfig
+        foreach ($k in $keep.games.Keys) { $script:pfCfg.games[$k] = $keep.games[$k] }
+        & $script:pfFill; & $script:pfMarks
+        $script:pfTarget = $null
+        $script:pfTargets.SelectedItem = ($script:pfTargets.Items | Where-Object { $_.Tag -eq $id } | Select-Object -First 1)
+        & $script:pfSay 'Added. Tick Lock on the settings you want to keep, set their values, then Save.'
+    })
+    $w.FindName('RemoveCustom').Add_Click({
+        $pg = Get-PerfGame $script:pfTarget
+        if (-not $pg -or -not $pg.Custom) { return }
+        if ([Windows.MessageBox]::Show("Remove $($pg.Name) from Performance? Its settings file isn't changed, and nothing else is removed.", 'Remove game', 'OKCancel', 'Question') -ne 'OK') { return }
+        $disk = Read-PerfConfig; $disk.custom = @($disk.custom | Where-Object { $_.id -ne $pg.Id }); if ($disk.games.Contains($pg.Id)) { $disk.games.Remove($pg.Id) }; Save-PerfConfig $disk
+        if ($script:pfCfg.games.Contains($pg.Id)) { $script:pfCfg.games.Remove($pg.Id) }
+        $script:pfCfg.custom = $disk.custom
+        Write-PerfLog "Removed your own game: $($pg.Name)"
+        $script:pfTarget = $null; $script:pfDirty = $false
+        & $script:pfFill; & $script:pfMarks; $script:pfTargets.SelectedIndex = 0
+        & $script:pfSay "$($pg.Name) was removed."
+    })
     $w.FindName('RequestGame').Add_Click({ try { Show-RequestGame } catch { & $script:pfSay "Couldn't open the request form: $($_.Exception.Message)" $true } })
     $w.FindName('Share').Add_Click({
         try { & $script:pfStore } catch { & $script:pfSay $_.Exception.Message $true; return }
@@ -3208,8 +3471,8 @@ function Show-Performance([string]$startId) {
 function Get-PerfIdForGame($game) {
     if (-not $game) { return $null }
     $route = (Get-Route $game)
-    $steam = @{ '270880' = 'ats'; '227300' = 'ets2'; '2537590' = 'msfs2024'; '1250410' = 'msfs2020'; '223750' = 'dcs'; '244210' = 'ac'; '1066890' = 'ams2'; '211500' = 'r3e' }
-    foreach ($pg in $PerfGames) { if ($route -and $route -match $pg.RouteMatch) { return $pg.Id } }
+    $steam = @{ '270880' = 'ats'; '227300' = 'ets2'; '2537590' = 'msfs2024'; '1250410' = 'msfs2020'; '223750' = 'dcs'; '244210' = 'ac'; '1066890' = 'ams2'; '211500' = 'r3e'; '805550' = 'acc'; '611670' = 'skyrimvr' }
+    foreach ($pg in (Get-AllPerfGames)) { if ($route -and $pg.RouteMatch -and $route -match $pg.RouteMatch) { return $pg.Id } }
     $id = Get-GameId $game
     if ($id -match '^steam\.app\.(\d+)$' -and $steam.ContainsKey($Matches[1])) { return $steam[$Matches[1]] }
     return $null
@@ -3395,6 +3658,73 @@ function Show-CommunitySetups($pg) {
     if ($script:Capture -or $Test) { return $w }
     [void]$w.ShowDialog()
     return $script:csPicked
+}
+
+
+# ---------- Add your own game (Performance) ----------
+# Any game that keeps its settings in a text file: pick the game's .exe and the file; every setting in it is listed.
+function Show-AddCustomGame {
+    $script:acw = New-DarkWindow 'Add your own game' 680 520 @'
+  <DockPanel Margin="18">
+    <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="#B4BCCC" Margin="0,0,0,12"
+               Text="Add a game that isn't in the list. Pick its .exe (so the app knows when it's running) and the file where it keeps its graphics settings - often in Documents, Saved Games, AppData or the game's folder (.ini, .cfg, .json, .xml, .lua, .prf). Every setting in the file is then listed, so you can lock the ones you want."/>
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+      <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoCheck}" x:Name="Add" Content="Add game" Background="#16A34A" BorderBrush="#22C55E" FontWeight="SemiBold"/>
+      <Button x:Name="Cancel" Content="Cancel" Margin="8,0,0,0"/>
+    </StackPanel>
+    <TextBlock DockPanel.Dock="Bottom" x:Name="Msg" TextWrapping="Wrap" Margin="0,10,0,0"/>
+    <StackPanel>
+      <TextBlock Text="Game name"/><TextBox x:Name="Name" Margin="0,4,0,10"/>
+      <TextBlock Text="The game's .exe"/>
+      <DockPanel Margin="0,4,0,10"><Button x:Name="BrowseExe" DockPanel.Dock="Right" Content="Browse..." Margin="8,0,0,0"/><TextBox x:Name="Exe"/></DockPanel>
+      <TextBlock Text="Its settings file"/>
+      <DockPanel Margin="0,4,0,10"><Button x:Name="BrowseFile" DockPanel.Dock="Right" Content="Browse..." Margin="8,0,0,0"/><TextBox x:Name="File"/></DockPanel>
+      <TextBlock x:Name="Detected" Foreground="#8B93A5" TextWrapping="Wrap"/>
+    </StackPanel>
+  </DockPanel>
+'@
+    $w = $script:acw; $script:acResult = $null
+    $script:acCheck = {
+        $f = $script:acw.FindName('File').Text.Trim().Trim('"'); $d = $script:acw.FindName('Detected')
+        if (-not $f -or -not (Test-Path -LiteralPath $f -PathType Leaf)) { $d.Text = ''; return $null }
+        $fmt = Get-PerfFormatGuess $f
+        if (-not $fmt) { $d.Text = "This file's layout isn't one the app can read."; $d.Foreground = '#F87171'; return $null }
+        $n = 0; try { $n = (Read-PerfValues ([pscustomobject]@{ Id = 'probe'; Format = $fmt; JsonParents = $null; BaseConfig = $null }) $f).Count } catch { }
+        $d.Foreground = $(if ($n) { '#4ADE80' } else { '#F87171' })
+        $d.Text = $(if ($n) { "Read as $($PerfFormatNames[$fmt]): $n settings found." } else { "No settings found in this file as $($PerfFormatNames[$fmt])." })
+        return $(if ($n) { $fmt } else { $null })
+    }
+    $w.FindName('File').Add_TextChanged({ [void](& $script:acCheck) })
+    $w.FindName('BrowseExe').Add_Click({
+        $dlg = New-Object Microsoft.Win32.OpenFileDialog; $dlg.Filter = 'Programs (*.exe)|*.exe'
+        if ($dlg.ShowDialog()) {
+            $script:acw.FindName('Exe').Text = $dlg.FileName
+            if (-not $script:acw.FindName('Name').Text) { $script:acw.FindName('Name').Text = Get-GameNameFromPath $dlg.FileName }
+        }
+    })
+    $w.FindName('BrowseFile').Add_Click({
+        $dlg = New-Object Microsoft.Win32.OpenFileDialog; $dlg.Filter = 'Settings files|*.ini;*.cfg;*.json;*.xml;*.lua;*.prf;*.opt;*.txt|All files|*.*'
+        $docs = [Environment]::GetFolderPath('MyDocuments'); if (Test-Path $docs) { $dlg.InitialDirectory = $docs }
+        if ($dlg.ShowDialog()) { $script:acw.FindName('File').Text = $dlg.FileName }
+    })
+    $w.FindName('Cancel').Add_Click({ $script:acw.Close() })
+    $w.FindName('Add').Add_Click({
+        $w = $script:acw; $msg = $w.FindName('Msg'); $msg.Foreground = '#F87171'
+        $name = $w.FindName('Name').Text.Trim(); $exe = $w.FindName('Exe').Text.Trim().Trim('"'); $file = $w.FindName('File').Text.Trim().Trim('"')
+        if (-not $name) { $msg.Text = 'Give the game a name.'; return }
+        if (-not $exe -or $exe -notmatch '\.exe$') { $msg.Text = "Pick the game's .exe."; return }
+        $fmt = & $script:acCheck
+        if (-not $fmt) { $msg.Text = "Pick a settings file the app can read."; return }
+        $cfg = Read-PerfConfig
+        $id = 'custom-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+        $cfg.custom = @($cfg.custom) + @([pscustomobject]@{ id = $id; name = $name; process = [IO.Path]::GetFileNameWithoutExtension($exe); path = $file; format = $fmt })
+        Save-PerfConfig $cfg
+        Write-PerfLog "Added your own game: $name ($file, read as $($PerfFormatNames[$fmt]))"
+        $script:acResult = $id; $w.Close()
+    })
+    if ($script:Capture -or $Test) { return $w }
+    [void]$w.ShowDialog()
+    return $script:acResult
 }
 
 $ui.PerfBtn.Add_Click({
@@ -3819,7 +4149,7 @@ $TutorialSteps = @(
     @{ Icon = 'IcoSliders'; Title = 'Game settings'
        Body = "Edit Pimax's per-game graphics settings in one place. Tick Custom to give a game its own value; everything else follows Global.`n`nApply to... copies one setting to other games, Copy all settings to... gives them the same full setup, and nothing is written until you click Save all changes." },
     @{ Icon = 'IcoGauge'; Title = 'Performance'; Since = '1.9.0'
-       Body = "Some games keep their graphics in their own file and reset it after an update. Performance... locks the settings you want in truck, racing and flight sims (ATS, ETS2, MSFS, DCS, Falcon BMS, iRacing, Assetto Corsa, AMS2, RaceRoom), with a VR starting point to begin from.`n`nIt can also run a game on your CPU's performance cores and pull its desktop window back on screen. The Performance Guard does this in the background from a tray icon." },
+       Body = "Some games keep their graphics in their own file and reset it after an update. Performance... locks the settings you want in truck, racing, flight and VR games (ATS, MSFS, DCS, iRacing, ACC, AC Rally, Skyrim VR, Crysis VR and more), with a VR starting point sized for your PC. Add your own game covers any other game that keeps its settings in a file.`n`nIt can also run a game on your CPU's performance cores and pull its desktop window back on screen. The Performance Guard does this in the background from a tray icon." },
     @{ Icon = 'IcoArchive'; Title = 'Backups'
        Body = "A backup is saved automatically whenever you change something here. If a Pimax update resets your images, order, settings or headset setup, an orange bar offers to put them back.`n`nYou can also restore any backup yourself from Backup & restore." },
     @{ Icon = 'IcoPower'; Title = 'Applying changes'
@@ -4167,6 +4497,8 @@ if ($Test) {
         $shw = Show-ShareSetup (Get-PerfGame 'ats') ([ordered]@{ r_ssao = '1'; g_traffic = '0.5' }); Save-Shot $shw 'share-setup'; $shw.Close()
         $rqw = Show-RequestGame; Save-Shot $rqw 'request-game'; $rqw.Close()
         $csw = Show-CommunitySetups (Get-PerfGame 'ats'); Save-Shot $csw 'community-setups'; $csw.Close()
+        $acw = Show-AddCustomGame; Save-Shot $acw 'add-custom'; $acw.Close()
+        $pfw = Show-Performance 'acc'; Save-Shot $pfw 'performance-acc'; $pfw.Close()
         $bw = Show-Backups $null $null; Save-Shot $bw 'backups'; $bw.Close()
         if ($pick) { $script:FinderTerm = 'Crysis'; $fw = Show-Finder $pick.Tag; Save-Shot $fw 'finder'; $fw.Close() }
         $aw = Show-AddGames

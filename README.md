@@ -149,8 +149,14 @@ Supported games and the file each one keeps its settings in:
 | Assetto Corsa | `Documents\Assetto Corsa\cfg\video.ini` (Content Manager writes this file too, so lock only what you want kept) |
 | Automobilista 2 | `Documents\Automobilista 2\graphicsconfigdx11.xml` |
 | RaceRoom Racing Experience | `Documents\My Games\SimBin\RaceRoom Racing Experience\UserData\graphics_options.xml` |
+| Assetto Corsa Competizione | `Documents\Assetto Corsa Competizione\Config\menuSettings.json` (both copies of the graphics settings in it are kept in step) |
+| Assetto Corsa Rally | `%LOCALAPPDATA%\acr\Saved\Config\Windows\GameUserSettings.ini` |
+| Crysis VR | `Documents\My Games\Crysis\game.cfg` |
+| Skyrim VR | the selected Mod Organizer 2 profile's `skyrimprefs.ini` (Wabbajack lists), otherwise `Documents\My Games\Skyrim VR\SkyrimPrefs.ini` |
 
-Games that aren't installed show as *not found*. Skyrim VR isn't included: mod managers like Mod Organizer 2 keep their own copy of its settings.
+Games that aren't installed show as *not installed*. Half-Life: Alyx isn't included: it sets its own detail level as you play and keeps almost nothing in its settings file.
+
+**Add your own game...** (under the game list) works with any other game that keeps its graphics settings in a text file, such as Le Mans Ultimate, IL-2 or X-Plane 12: pick the game's .exe and the file (.ini, .cfg, .json, .xml, .lua, .prf...). The app works out the file's layout, lists every setting in it, and you lock the ones you want; **Find a setting** narrows the list. Locking, the performance cores and the window fix work the same as for the built-in games.
 
 For each game:
 

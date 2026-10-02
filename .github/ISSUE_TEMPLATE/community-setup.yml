@@ -12,7 +12,7 @@ body:
     id: game
     attributes:
       label: Game
-      options: [ats, ets2, msfs2024, msfs2020, dcs, bms, iracing, ac, ams2, r3e]
+      options: [ats, ets2, msfs2024, msfs2020, dcs, bms, iracing, ac, ams2, r3e, acc, acr, crysisvr, skyrimvr]
     validations:
       required: true
   - type: textarea

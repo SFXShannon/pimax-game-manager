@@ -5,7 +5,8 @@ import json, os, re
 GAMES = {
     "ats": "American Truck Simulator", "ets2": "Euro Truck Simulator 2", "msfs2024": "Microsoft Flight Simulator 2024",
     "msfs2020": "Microsoft Flight Simulator 2020", "dcs": "DCS World", "bms": "Falcon BMS", "iracing": "iRacing (VR)",
-    "ac": "Assetto Corsa", "ams2": "Automobilista 2", "r3e": "RaceRoom Racing Experience",
+    "ac": "Assetto Corsa", "ams2": "Automobilista 2", "r3e": "RaceRoom Racing Experience", "acc": "Assetto Corsa Competizione",
+    "acr": "Assetto Corsa Rally", "crysisvr": "Crysis VR", "skyrimvr": "Skyrim VR",
 }
 PATH = "community/setups.json"
 
