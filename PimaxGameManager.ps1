@@ -37,7 +37,7 @@ try {
     if ((Test-Path $legacyCfg) -and -not (Test-Path $newCfg)) { Copy-Item $legacyCfg $newCfg }
 } catch { }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
-$AppVersion = '1.9.1'
+$AppVersion = '1.9.2'
 $RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-game-manager/releases/latest'
 
 # ---------- Performance: lock game settings, performance cores, window fix, background guard ----------
@@ -589,7 +589,9 @@ function Start-PerfGuard {
     $script:gTray = New-Object Windows.Forms.NotifyIcon
     $menu = New-Object Windows.Forms.ContextMenuStrip
     $script:gHeader = New-Object Windows.Forms.ToolStripMenuItem('Performance Guard'); $script:gHeader.Enabled = $false
-    [void]$menu.Items.Add($script:gHeader); [void]$menu.Items.Add('-')
+    [void]$menu.Items.Add($script:gHeader)
+    $script:gGames = New-Object Windows.Forms.ToolStripMenuItem('Games')
+    [void]$menu.Items.Add($script:gGames); [void]$menu.Items.Add('-')
     $script:gToggle = $menu.Items.Add('Pause')
     $miCheck = $menu.Items.Add('Put locked settings back now')
     $miApp   = $menu.Items.Add('Open Pimax Game Manager')
@@ -598,13 +600,22 @@ function Start-PerfGuard {
     $miExit  = $menu.Items.Add('Exit (until next sign-in)')
     $script:gTray.ContextMenuStrip = $menu
 
+    # Tray tooltips are cut off at 63 characters, so the tooltip gives a count and the menu lists each game
     $script:gUpdate = {
-        $locked = @($script:gCfg.games.Keys | Where-Object { $script:gCfg.games[$_].lock -or $script:gCfg.games[$_].pinCores -or $script:gCfg.games[$_].keepWindow } |
-                    ForEach-Object { (Get-PerfGame $_).Name } | Where-Object { $_ })
+        $watched = @(foreach ($id in $script:gCfg.games.Keys) {
+            $e = $script:gCfg.games[$id]; $pg = Get-PerfGame $id
+            if (-not $pg) { continue }
+            $what = @(); if ($e.lock -and $e.values.Count) { $what += "$($e.values.Count) settings locked" }; if ($e.pinCores) { $what += 'performance cores' }; if ($e.keepWindow) { $what += 'window on screen' }
+            if ($what.Count) { [pscustomobject]@{ Name = $pg.Name; What = ($what -join ', ') } }
+        })
         $state = if ($script:gPaused) { 'paused' } else { 'on' }
         $script:gTray.Icon = if ($script:gPaused) { $script:gIconOff } else { $script:gIconOn }
-        $tip = "Performance Guard - $state"; if ($locked.Count) { $tip += " (" + ($locked -join ', ') + ")" }
+        $tip = "Performance Guard - $state - " + $(if ($watched.Count -eq 1) { $watched[0].Name } elseif ($watched.Count) { "$($watched.Count) games" } else { 'no games set up' })
         $script:gTray.Text = $tip.Substring(0, [Math]::Min(63, $tip.Length))
+        $script:gGames.DropDownItems.Clear()
+        $script:gGames.Text = $(if ($watched.Count) { "Games ($($watched.Count))" } else { 'Games (none set up)' })
+        foreach ($w in ($watched | Sort-Object Name)) { $it = $script:gGames.DropDownItems.Add("$($w.Name): $($w.What)"); $it.Enabled = $false }
+        if (-not $watched.Count) { $it = $script:gGames.DropDownItems.Add('Set games up in Pimax Game Manager > Performance'); $it.Enabled = $false }
         $script:gHeader.Text = "Performance Guard - $state"
         $script:gToggle.Text = if ($script:gPaused) { 'Resume' } else { 'Pause' }
     }

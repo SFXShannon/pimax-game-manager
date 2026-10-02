@@ -165,7 +165,7 @@ For each game:
 
 The locks and the core and window options are carried out by the **Performance Guard**, a small part of the app that runs in the background with a tray icon by the clock. Turn it on with **Run it, and start it with Windows** at the bottom left of the Performance window. It starts at sign-in from a Windows scheduled task (`Pimax Game Manager Performance Guard`), so there's no admin prompt, and it checks about every 3 seconds using almost no CPU.
 
-Right-click the tray icon to **Pause** or **Resume** it, put locked settings back straight away, open the app, open the log (`%APPDATA%\PimaxGameManager\performance.log`), or exit until you next sign in. A notification tells you when it puts settings back. Turning it off in the Performance window removes it from startup.
+Hover over the tray icon to see whether it's on and how many games it looks after; right-click it to see each game and what's set for it, **Pause** or **Resume** it, put locked settings back straight away, open the app, open the log (`%APPDATA%\PimaxGameManager\performance.log`), or exit until you next sign in. A notification tells you when it puts settings back. Turning it off in the Performance window removes it from startup.
 
 Your choices are stored in `%APPDATA%\PimaxGameManager\performance.json`.
 
@@ -243,13 +243,13 @@ Add `-Guard` to run only the Performance Guard.
 
 ```powershell
 Install-Module ps2exe -Scope CurrentUser
-Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.9.1
+Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.9.2
 ```
 
 To build the installer too, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
-& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.9.1 .\PimaxGameManager.iss
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.9.2 .\PimaxGameManager.iss
 ```
 
 The app icon and `assets/logo.png` are generated from the logo shapes used in the app:
