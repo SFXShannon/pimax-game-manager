@@ -1,3 +1,43 @@
 {
-  "setups": []
+  "setups": [
+    {
+      "id": 2,
+      "game": "ats",
+      "values": {
+        "r_scale_x": "1",
+        "r_scale_y": "1",
+        "t_ignore_hmd_timing": "0",
+        "t_limit_fps": "0",
+        "t_limit_fps_inactive": "0",
+        "r_ssao": "1",
+        "r_sun_shadow_texture_size": "2048",
+        "r_cloud_shadows": "0",
+        "r_far_shadow_disable": "1",
+        "g_rain_reflection": "0",
+        "g_reflection": "0",
+        "r_mirror_view_distance": "150",
+        "g_traffic": "0.5",
+        "g_lod_factor_traffic": "0.5",
+        "g_lod_factor_parked": "0.5",
+        "g_lod_factor_pedestrian": "0.5",
+        "g_grass_density": "1",
+        "g_veg_detail": "1",
+        "r_anisotropy_factor": "1",
+        "r_mode_width": "960",
+        "r_mode_height": "540"
+      },
+      "gpu": "NVIDIA GeForce RTX 4090",
+      "cpu": "Intel(R) Core(TM) i9-14900K",
+      "ramGB": 64,
+      "gpuTier": 3,
+      "cpuTier": 3,
+      "headset": "Pimax Dream Air",
+      "pimaxScale": 0.75,
+      "result": "Steady 90 most of the time was 72-78 in cities before tuning (CPU-limited)",
+      "author": "Shannon",
+      "notes": "Run on the performance cores. ATS is limited by one CPU thread, so traffic, mirrors and detail distance matter more than graphics settings.",
+      "date": "2026-10-02",
+      "source": "https://github.com/SFXShannon/pimax-game-manager/issues/2"
+    }
+  ]
 }
