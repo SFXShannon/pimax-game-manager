@@ -4,11 +4,11 @@
 
 [![Downloads](https://img.shields.io/github/downloads/SFXShannon/pimax-game-manager/total?label=downloads)](https://github.com/SFXShannon/pimax-game-manager/releases) [![Latest release](https://img.shields.io/github/v/release/SFXShannon/pimax-game-manager?label=latest)](https://github.com/SFXShannon/pimax-game-manager/releases/latest) [![License: MIT](https://img.shields.io/github/license/SFXShannon/pimax-game-manager)](LICENSE)
 
-A Windows tool for managing your **Pimax Play** library: add games (one at a time or a whole folder), launch them, set custom cover images, arrange the library in any order, edit per-game settings for many games at once, and back it all up so a Pimax update can't wipe your changes.
+A Windows tool for managing your **Pimax Play** library: add games (one at a time or a whole folder), launch them, set custom cover images, arrange the library in any order, edit per-game settings for many games at once, keep truck, racing and flight sims running smoothly with locked graphics settings, and back it all up so a Pimax update can't wipe your changes.
 
 *Formerly Pimax Cover Changer.*
 
-![Pimax Game Manager](screenshots/main-window-v1.8.1.png)
+![Pimax Game Manager](screenshots/main-window-v1.9.0.png)
 
 ## Download
 
@@ -22,7 +22,7 @@ Windows SmartScreen or Defender may warn about it as an unrecognized app. If you
 
 ## First-launch tour
 
-The first time you open the app, a short tour walks through playing games, images, adding games, library order, game settings, backups, applying changes, and updates. Use **Next** / **Back** (or the arrow keys) to step through it.
+The first time you open the app, a short tour walks through playing games, images, adding games, library order, game settings, performance, backups, applying changes, and updates. Use **Next** / **Back** (or the arrow keys) to step through it.
 
 ![Tour](screenshots/tutorial-v1.8.1.png)
 
@@ -130,6 +130,44 @@ Settings covered: image quality and render resolution, overlay render factor, Qu
 
 Settings live in `%APPDATA%\Pimax\AppConfig` (`global.json` plus one file per game, named by the game's ID). Each file is backed up to `%APPDATA%\PimaxGameManager\backups\settings` before its first change.
 
+## Performance
+
+Some games keep their own graphics settings in their own file, separate from Pimax's, and quietly reset them after an update or when a setting is changed in the game menu. **Performance...** keeps them the way you tuned them, and helps games whose frame rate is held back by the CPU.
+
+![Performance](screenshots/performance-v1.9.0.png)
+
+Supported games and the file each one keeps its settings in:
+
+| Game | Settings file |
+|---|---|
+| American Truck Simulator, Euro Truck Simulator 2 | `config.cfg` in Documents |
+| Microsoft Flight Simulator 2024 and 2020 | `UserCfg.opt` (Microsoft Store/Xbox and Steam versions; VR settings only) |
+| DCS World | `Saved Games\DCS\Config\options.lua` |
+| Falcon BMS | `User\Config\Falcon BMS User.cfg` (BMS reads it after `Falcon BMS.cfg`, and updates don't replace it) |
+| iRacing | `Documents\iRacing\rendererDX11OpenXR.ini` (the VR renderer's settings) |
+| Assetto Corsa | `Documents\Assetto Corsa\cfg\video.ini` (Content Manager writes this file too, so lock only what you want kept) |
+| Automobilista 2 | `Documents\Automobilista 2\graphicsconfigdx11.xml` |
+| RaceRoom Racing Experience | `Documents\My Games\SimBin\RaceRoom Racing Experience\UserData\graphics_options.xml` |
+
+Games that aren't installed show as *not found*. Skyrim VR isn't included: mod managers like Mod Organizer 2 keep their own copy of its settings.
+
+For each game:
+
+- **Lock the settings ticked below**: tick **Lock** on a setting and give it a value. While the game is closed, any locked setting that changed is put back. The game's file is backed up to `%APPDATA%\PimaxGameManager\backups\performance` first (the last 20 copies per game are kept). Changes are never made while the game is running, because these games rewrite their file when they quit.
+- **Recommended for VR** fills in a starting point for VR: frame pacing left to the headset, and the heaviest CPU and GPU settings (mirrors, traffic, level of detail, shadows, reflections) turned down a step. Settings without a suggestion are left alone. Hover a setting to see what it does.
+- **Use current values** copies what the game has now into the ticked settings, so you can tune in the game and then lock it.
+- **Run the game on the performance cores only**: on CPUs with performance and efficiency cores (Intel 12th gen and later), the game is kept on the performance cores and given a slightly higher priority, so its main thread never lands on a slower core. Driving and flight sims are often limited by one CPU thread, so this can remove stutters. Hidden on CPUs where all cores are the same.
+- **Keep the game's desktop window on screen**: if the game opens its desktop window off the edge of the monitor (often where a second screen used to be), it's moved back and made small.
+- **Save** stores your choices; **Save & apply to the game now** also writes the locked settings into the game's file straight away (close the game first).
+
+### Performance Guard
+
+The locks and the core and window options are carried out by the **Performance Guard**, a small part of the app that runs in the background with a tray icon by the clock. Turn it on with **Run it, and start it with Windows** at the bottom left of the Performance window. It starts at sign-in from a Windows scheduled task (`Pimax Game Manager Performance Guard`), so there's no admin prompt, and it checks about every 3 seconds using almost no CPU.
+
+Right-click the tray icon to **Pause** or **Resume** it, put locked settings back straight away, open the app, open the log (`%APPDATA%\PimaxGameManager\performance.log`), or exit until you next sign in. A notification tells you when it puts settings back. Turning it off in the Performance window removes it from startup.
+
+Your choices are stored in `%APPDATA%\PimaxGameManager\performance.json`.
+
 ## Backup & restore
 
 Pimax updates sometimes reset library images, the library order, game settings or your headset setup. Pimax Game Manager keeps its own backups so you can put them back.
@@ -184,6 +222,7 @@ Pimax Play keeps each library entry as a JSON file in `%APPDATA%\Pimax\manifest`
 - adds games by writing a new entry file of the same form Pimax's Import makes (`"source":"pimax_import"`, a random `local.xxxxxxxx` ID, the game's name and the .exe or shortcut to start), and checks the .exe path so a game isn't added twice,
 - launches a game by opening the entry's `route` through Explorer, so it runs as you rather than as admin; for a plain .exe it first writes a small shortcut to `%APPDATA%\PimaxGameManager\launch` that sets the game's folder as its working folder,
 - writes files back as UTF-8 **without a BOM** (Pimax silently drops entries saved with one),
+- for **Performance**, edits only the lines of a game's own settings file that you locked, keeping its encoding and line endings, and only while the game is closed,
 - restarts Pimax: it stops Pimax Play, the `PiServiceLauncher` service and `PiPlayService.exe` (which holds the library and settings in memory and survives a plain service restart), then starts them again. Game settings are written while Pimax is stopped so it can't overwrite them.
 
 ## Notes
@@ -197,17 +236,19 @@ Pimax Play keeps each library entry as a JSON file in `%APPDATA%\Pimax\manifest`
 powershell -ExecutionPolicy Bypass -File .\PimaxGameManager.ps1
 ```
 
+Add `-Guard` to run only the Performance Guard.
+
 ## Build the exe yourself
 
 ```powershell
 Install-Module ps2exe -Scope CurrentUser
-Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.8.2
+Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.9.0
 ```
 
 To build the installer too, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
-& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.8.2 .\PimaxGameManager.iss
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.9.0 .\PimaxGameManager.iss
 ```
 
 The app icon and `assets/logo.png` are generated from the logo shapes used in the app:

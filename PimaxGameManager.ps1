@@ -1,8 +1,9 @@
-# Pimax Game Manager - library images, library order and per-game settings for Pimax Play
-param([switch]$Test)
+# Pimax Game Manager - library images, library order, per-game settings and performance for Pimax Play
+# -Guard starts the Performance Guard (tray icon) instead of the window
+param([switch]$Test, [switch]$Guard)
 
 # --- Run as admin (needed to restart the Pimax service) ---
-if (-not $Test) {
+if (-not $Test -and -not $Guard) {
     $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`""
@@ -10,7 +11,7 @@ if (-not $Test) {
     }
 }
 
-Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Windows.Forms
+if (-not $Guard) { Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Windows.Forms }
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $PimaxDir    = Join-Path $env:APPDATA 'Pimax'
@@ -36,8 +37,630 @@ try {
     if ((Test-Path $legacyCfg) -and -not (Test-Path $newCfg)) { Copy-Item $legacyCfg $newCfg }
 } catch { }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
-$AppVersion = '1.8.2'
+$AppVersion = '1.9.0'
 $RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-game-manager/releases/latest'
+
+# ---------- Performance: lock game settings, performance cores, window fix, background guard ----------
+# Some games (American Truck Simulator, MSFS...) keep their graphics settings in their own file and
+# rewrite it when they quit or update. "Performance" remembers the values you want and puts them back
+# while the game is closed, runs the game on the CPU's performance cores and keeps its desktop window
+# on screen. The background part (the Performance Guard) is this same app started with -Guard; it runs
+# at logon from a scheduled task, so it needs no admin prompt, and shows a tray icon.
+$PerfFile      = Join-Path $DataDir 'performance.json'
+$PerfLog       = Join-Path $DataDir 'performance.log'
+$PerfBackupDir = Join-Path $BackupDir 'performance'
+$GuardTask     = 'Pimax Game Manager Performance Guard'
+$GuardMutex    = 'Global\PimaxGameManagerPerformanceGuard'
+$PerfInv       = [Globalization.CultureInfo]::InvariantCulture
+
+function New-PerfSetting([string]$key, [string]$label, [string]$group, $rec, [string]$tip) {
+    [pscustomobject]@{ Key = $key; Label = $label; Group = $group; Recommended = $rec; Tip = $tip }
+}
+
+# Settings shown for the SCS engine games (American Truck Simulator, Euro Truck Simulator 2): config.cfg, lines like  uset r_ssao "2"
+$ScsSettings = @(
+    New-PerfSetting 'r_scale_x' 'Scaling (width)' 'Resolution & timing' '1' 'In-game resolution scaling. In VR it multiplies the headset resolution, so 1 = exactly what the headset asks for.'
+    New-PerfSetting 'r_scale_y' 'Scaling (height)' 'Resolution & timing' '1' 'Should match the width. A different value stretches the render and costs GPU time.'
+    New-PerfSetting 't_ignore_hmd_timing' 'Ignore headset timing (1 = yes)' 'Resolution & timing' '0' '0 lets the headset pace the frames, which avoids judder in VR.'
+    New-PerfSetting 't_limit_fps' 'Frame rate limit (0 = off)' 'Resolution & timing' '0' 'In VR the headset sets the frame rate, so the game''s own limiter is best off.'
+    New-PerfSetting 't_limit_fps_inactive' 'Frame rate limit when not focused (0 = off)' 'Resolution & timing' '0' 'The game drops to this frame rate when its desktop window is not the active window.'
+    New-PerfSetting 'r_ssao' 'Ambient occlusion (0-2)' 'Graphics (GPU)' '1' 'SSAO. 1 is much cheaper than 2 and hard to tell apart in VR.'
+    New-PerfSetting 'r_sun_shadow_texture_size' 'Sun shadow size' 'Graphics (GPU)' '2048' '4096, 2048 or 1024.'
+    New-PerfSetting 'r_cloud_shadows' 'Cloud shadows (1 = on)' 'Graphics (GPU)' '0' ''
+    New-PerfSetting 'r_far_shadow_disable' 'Far shadows off (1 = off)' 'Graphics (GPU)' '1' 'Also saves CPU time.'
+    New-PerfSetting 'g_reflection' 'Reflections (1 = on)' 'Graphics (GPU)' '0' ''
+    New-PerfSetting 'g_rain_reflection' 'Rain reflections (1 = on)' 'Graphics (GPU)' '0' 'Only costs anything in rain, but then it causes frame drops.'
+    New-PerfSetting 'r_anisotropy_factor' 'Texture filtering (0-1)' 'Graphics (GPU)' '1' 'Sharper roads in the distance for almost no cost.'
+    New-PerfSetting 'r_mirror_view_distance' 'Mirror view distance' 'World detail (CPU)' '150' 'Every mirror draws the world again on the main thread - the biggest CPU cost in cities.'
+    New-PerfSetting 'g_traffic' 'Traffic density' 'World detail (CPU)' '0.5' ''
+    New-PerfSetting 'g_lod_factor_traffic' 'Traffic detail distance' 'World detail (CPU)' '0.5' ''
+    New-PerfSetting 'g_lod_factor_parked' 'Parked car detail distance' 'World detail (CPU)' '0.5' ''
+    New-PerfSetting 'g_lod_factor_pedestrian' 'Pedestrian detail distance' 'World detail (CPU)' '0.5' ''
+    New-PerfSetting 'g_grass_density' 'Grass density (0-2)' 'World detail (CPU)' '1' ''
+    New-PerfSetting 'g_veg_detail' 'Vegetation detail (0-2)' 'World detail (CPU)' '1' ''
+    New-PerfSetting 'r_mode_width' 'Desktop window width' 'Desktop window' '960' 'The mirror window on your monitor. Smaller is cheaper and easier to keep on screen.'
+    New-PerfSetting 'r_mode_height' 'Desktop window height' 'Desktop window' '540' ''
+)
+
+# Settings shown for Microsoft Flight Simulator: UserCfg.opt, nested {Section ... } blocks. Only the VR settings are listed.
+# No recommended value means "keep what you have" - Recommended for VR leaves those alone.
+$MsfsSettings = @(
+    New-PerfSetting 'Video/PrimaryScalingVR' 'Render scaling (VR)' 'Resolution & timing' $null '1.000000 = the headset resolution.'
+    New-PerfSetting 'Video/AntiAliasingVR' 'Anti-aliasing (VR)' 'Resolution & timing' $null 'DLSS, TAA, FSR...'
+    New-PerfSetting 'Video/DLSSModeVR' 'DLSS mode (VR)' 'Resolution & timing' $null 'QUALITY, BALANCED, PERFORMANCE, AUTO...'
+    New-PerfSetting 'Video/DynamicSettingsVR' 'Dynamic settings (VR, 1 = on)' 'Resolution & timing' '0' 'When on, the sim changes settings on its own, which fights a locked setup.'
+    New-PerfSetting 'GraphicsVR/Shadows/Size' 'Shadow map size' 'Graphics (GPU)' $null '768, 1024, 1536, 2048...'
+    New-PerfSetting 'GraphicsVR/VolumetricClouds/Quality' 'Volumetric clouds (0-3)' 'Graphics (GPU)' '2' ''
+    New-PerfSetting 'GraphicsVR/SSR/Enabled' 'Screen space reflections (1 = on)' 'Graphics (GPU)' '0' ''
+    New-PerfSetting 'GraphicsVR/SSAO/Quality' 'Ambient occlusion (0-3)' 'Graphics (GPU)' '1' ''
+    New-PerfSetting 'GraphicsVR/Terrain/LoDFactor' 'Terrain level of detail' 'World detail (CPU)' '1.0' 'The biggest CPU setting in the sim. 1.0 is about "Medium/High".'
+    New-PerfSetting 'GraphicsVR/ObjectsLoD/LoDFactor' 'Objects level of detail' 'World detail (CPU)' '1.0' ''
+    New-PerfSetting 'GraphicsVR/Buildings/Quality' 'Buildings (0-3)' 'World detail (CPU)' '2' ''
+    New-PerfSetting 'GraphicsVR/Procedural/TreesQuality' 'Trees (0-3)' 'World detail (CPU)' '2' ''
+    New-PerfSetting 'GraphicsVR/Procedural/GrassQuality' 'Grass and bushes (0-3)' 'World detail (CPU)' '2' ''
+    New-PerfSetting 'GraphicsVR/Characters/Quantity' 'People (0-3)' 'World detail (CPU)' '1' ''
+    New-PerfSetting 'GraphicsVR/Fauna/Quantity' 'Animals (0-3)' 'World detail (CPU)' '1' ''
+    New-PerfSetting 'GraphicsVR/Traffic/AircraftTrafficQuantity' 'Air traffic (0-3)' 'World detail (CPU)' '1' ''
+    New-PerfSetting 'GraphicsVR/Traffic/ParkedAircraftQuantity' 'Parked aircraft (0-3)' 'World detail (CPU)' '1' ''
+    New-PerfSetting 'GraphicsVR/Traffic/AirportsServicesQuantity' 'Airport vehicles (0-3)' 'World detail (CPU)' '1' ''
+    New-PerfSetting 'GraphicsVR/Traffic/RoadQuality' 'Road traffic (0-3)' 'World detail (CPU)' '1' ''
+    New-PerfSetting 'GraphicsVR/Traffic/SeaQuality' 'Boats (0-3)' 'World detail (CPU)' '1' ''
+    New-PerfSetting 'GraphicsVR/GlassCockpitsRefreshRate/Quality' 'Glass cockpit refresh rate (0-2)' 'World detail (CPU)' '1' 'Cockpit screens redraw on the main thread.'
+)
+
+# iRacing: the VR renderer has its own file, rendererDX11OpenXR.ini
+$IRacingSettings = @(
+    New-PerfSetting 'Graphics Options/LODMinFPSTarget' 'Lower detail when FPS drops below' 'Resolution & timing' '90' 'iRacing lowers level of detail on its own when the frame rate falls under this. Set it to your headset refresh rate.'
+    New-PerfSetting 'Graphics Options/EnableHDR' 'HDR rendering (1 = on)' 'Graphics (GPU)' '0' ''
+    New-PerfSetting 'Graphics Options/SSAO' 'Ambient occlusion (1 = on)' 'Graphics (GPU)' '0' ''
+    New-PerfSetting 'Graphics Options/SSRLevel' 'Screen space reflections (0-2)' 'Graphics (GPU)' '0' ''
+    New-PerfSetting 'Graphics Options/HeatHaze' 'Heat haze (1 = on)' 'Graphics (GPU)' '0' ''
+    New-PerfSetting 'Graphics Options/DepthOfField' 'Depth of field (1 = on)' 'Graphics (GPU)' '0' ''
+    New-PerfSetting 'Graphics Options/MotionBlurStrength' 'Motion blur (0-4)' 'Graphics (GPU)' '0' ''
+    New-PerfSetting 'Graphics Options/ShadowDetail' 'Shadow detail (0 = fewer)' 'Graphics (GPU)' '0' ''
+    New-PerfSetting 'Graphics Options/DynamicShadowRes' 'Car shadow resolution (0-4)' 'Graphics (GPU)' '1' ''
+    New-PerfSetting 'Graphics Options/ShaderQuality' 'Shader quality (0-3)' 'Graphics (GPU)' $null ''
+    New-PerfSetting 'Graphics Options/NumDynamicCubemaps' 'Dynamic reflections per frame' 'Graphics (GPU)' '0' 'Reflections on the car body. 0 is a big saving.'
+    New-PerfSetting 'Graphics Options/MaxCarsToDraw' 'Cars drawn (10-64)' 'World detail (CPU)' '20' 'The biggest CPU setting in iRacing.'
+    New-PerfSetting 'Graphics Options/MaxCarsToDrawInMirrors' 'Cars drawn in mirrors (4-64)' 'World detail (CPU)' '8' ''
+    New-PerfSetting 'Graphics Options/MaxCockpitMirrors' 'Cockpit mirrors (0-4)' 'World detail (CPU)' $null 'Each mirror draws the scene again. Fewer is faster.'
+    New-PerfSetting 'Graphics Options/MirrorDetail' 'Mirror detail (1 = high)' 'World detail (CPU)' '0' ''
+    New-PerfSetting 'Graphics Options/ObjectDetail' 'Object population (0-2)' 'World detail (CPU)' '1' ''
+    New-PerfSetting 'Graphics Options/CrowdDetail' 'Crowd (0-3)' 'World detail (CPU)' '1' ''
+    New-PerfSetting 'Graphics Options/GrandstandDetail' 'Grandstands (0-2)' 'World detail (CPU)' '1' ''
+    New-PerfSetting 'Graphics Options/PitObjectDetail' 'Pit objects (0-3)' 'World detail (CPU)' '1' ''
+    New-PerfSetting 'Graphics Options/FoliageDetail' 'Foliage (0-3)' 'World detail (CPU)' '1' ''
+    New-PerfSetting 'Graphics Options/ParticleDetail' 'Particles (0-2)' 'World detail (CPU)' '1' ''
+    New-PerfSetting 'Graphics Options/WeekendDetail' 'Event detail (0-2)' 'World detail (CPU)' '1' ''
+)
+
+# Assetto Corsa: cfg\video.ini (Content Manager also writes this file - lock only what you want to keep)
+$AcSettings = @(
+    New-PerfSetting 'VIDEO/AASAMPLES' 'Anti-aliasing samples (MSAA)' 'Graphics (GPU)' '2' 'Each step doubles the cost in VR. 2 or 4.'
+    New-PerfSetting 'VIDEO/SHADOW_MAP_SIZE' 'Shadow resolution' 'Graphics (GPU)' '2048' '1024, 2048 or 4096.'
+    New-PerfSetting 'VIDEO/ANISOTROPIC' 'Texture filtering' 'Graphics (GPU)' $null '0, 2, 4, 8 or 16.'
+    New-PerfSetting 'POST_PROCESS/ENABLED' 'Post processing (1 = on)' 'Graphics (GPU)' $null ''
+    New-PerfSetting 'POST_PROCESS/DOF' 'Depth of field (0-5)' 'Graphics (GPU)' '0' 'Blurs things in VR and costs GPU time.'
+    New-PerfSetting 'POST_PROCESS/HEAT_SHIMMER' 'Heat shimmer (1 = on)' 'Graphics (GPU)' '0' ''
+    New-PerfSetting 'POST_PROCESS/GLARE' 'Glare (0-5)' 'Graphics (GPU)' $null ''
+    New-PerfSetting 'CUBEMAP/FACES_PER_FRAME' 'Reflection faces per frame (0-6)' 'Graphics (GPU)' '1' 'Car reflections redrawn each frame. 1 is a big saving and still looks good.'
+    New-PerfSetting 'CUBEMAP/SIZE' 'Reflection resolution' 'Graphics (GPU)' '512' ''
+    New-PerfSetting 'EFFECTS/SMOKE' 'Smoke (0-5)' 'Graphics (GPU)' '2' ''
+    New-PerfSetting 'EFFECTS/RENDER_SMOKE_IN_MIRROR' 'Smoke in mirrors (1 = on)' 'World detail (CPU)' '0' ''
+    New-PerfSetting 'MIRROR/HQ' 'High quality mirrors (1 = on)' 'World detail (CPU)' '0' ''
+    New-PerfSetting 'MIRROR/SIZE' 'Mirror resolution' 'World detail (CPU)' '512' ''
+    New-PerfSetting 'ASSETTOCORSA/WORLD_DETAIL' 'World detail (0-5)' 'World detail (CPU)' '4' ''
+)
+
+# DCS World: Saved Games\DCS\Config\options.lua
+$DcsSettings = @(
+    New-PerfSetting 'VR/pixel_density' 'VR pixel density' 'Resolution & timing' $null '1.0 = the headset resolution. Leave at 1.0 if Pimax or OpenXR Toolkit sets the resolution.'
+    New-PerfSetting 'graphics/MSAA' 'MSAA (0 = off)' 'Graphics (GPU)' $null 'MSAA is very expensive in VR; DLSS is usually the better choice.'
+    New-PerfSetting 'graphics/shadows' 'Shadows (0-4)' 'Graphics (GPU)' '2' ''
+    New-PerfSetting 'graphics/SSAO' 'SSAO (0 = off)' 'Graphics (GPU)' '0' ''
+    New-PerfSetting 'graphics/SSLR' 'Screen space reflections (0 = off)' 'Graphics (GPU)' '0' ''
+    New-PerfSetting 'graphics/DOF' 'Depth of field (0 = off)' 'Graphics (GPU)' '0' ''
+    New-PerfSetting 'graphics/motionBlur' 'Motion blur (0 = off)' 'Graphics (GPU)' '0' ''
+    New-PerfSetting 'graphics/LensEffects' 'Lens effects (0 = off)' 'Graphics (GPU)' '0' ''
+    New-PerfSetting 'graphics/heatBlr' 'Heat blur (0 = off)' 'Graphics (GPU)' '0' ''
+    New-PerfSetting 'graphics/clouds' 'Cloud quality' 'Graphics (GPU)' $null ''
+    New-PerfSetting 'graphics/visibRange' 'Visible range' 'World detail (CPU)' 'Medium' 'Low, Medium, High, Ultra, Extreme.'
+    New-PerfSetting 'graphics/clutterMaxDistance' 'Clutter / grass distance (0-1500)' 'World detail (CPU)' '400' ''
+    New-PerfSetting 'graphics/forestDistanceFactor' 'Tree visibility (0.1-1)' 'World detail (CPU)' '0.5' ''
+    New-PerfSetting 'graphics/forestDetailsFactor' 'Forest details (0.1-1)' 'World detail (CPU)' '0.5' ''
+    New-PerfSetting 'graphics/sceneryDetailsFactor' 'Scenery details (0.1-1)' 'World detail (CPU)' $null ''
+    New-PerfSetting 'graphics/civTraffic' 'Civilian traffic' 'World detail (CPU)' 'low' 'empty string = off, low, medium, high.'
+    New-PerfSetting 'graphics/terrainTextures' 'Terrain textures' 'World detail (CPU)' $null 'min or max.'
+    New-PerfSetting 'graphics/maxFPS' 'Frame rate limit' 'Resolution & timing' $null 'Used when the headset does not set the frame rate.'
+)
+
+# Automobilista 2: graphicsconfigdx11.xml (the game's own menu writes the same values)
+$Ams2Settings = @(
+    New-PerfSetting 'AntiAlias' 'Anti-aliasing (0 = off)' 'Graphics (GPU)' $null ''
+    New-PerfSetting 'VRSuperSampling' 'VR supersampling (0 = off)' 'Graphics (GPU)' $null ''
+    New-PerfSetting 'ShadowDetailLevel' 'Shadow detail (0 = low)' 'Graphics (GPU)' '1' ''
+    New-PerfSetting 'EffectsDetailLevel' 'Effects detail (0 = low)' 'Graphics (GPU)' '1' ''
+    New-PerfSetting 'EnvmapDetailLevel' 'Reflection map detail (0 = low)' 'Graphics (GPU)' '1' ''
+    New-PerfSetting 'EnvmapReflectionDetailLevel' 'Reflection detail (0 = low)' 'Graphics (GPU)' '0' ''
+    New-PerfSetting 'MotionblurLevel' 'Motion blur (0 = off)' 'Graphics (GPU)' '0' ''
+    New-PerfSetting 'TextureResolution' 'Texture resolution' 'Graphics (GPU)' $null ''
+    New-PerfSetting 'CarDetailLevel' 'Car detail (0 = low)' 'World detail (CPU)' '1' ''
+    New-PerfSetting 'TrackDetailLevel' 'Track detail (0 = low)' 'World detail (CPU)' '1' ''
+    New-PerfSetting 'MaxVisibleVehicles' 'Visible cars (setting step)' 'World detail (CPU)' $null 'The step picked in the menu (0 = fewest).'
+    New-PerfSetting 'MirrorEnhanced' 'Enhanced mirror (1 = on)' 'World detail (CPU)' '0' ''
+)
+
+# RaceRoom: UserData\graphics_options.xml
+$R3eSettings = @(
+    New-PerfSetting 'multiSampleLevel' 'Anti-aliasing samples' 'Graphics (GPU)' '2' ''
+    New-PerfSetting 'enableBloom' 'Bloom (true/false)' 'Graphics (GPU)' $null ''
+    New-PerfSetting 'enableSunRays' 'Sun rays (true/false)' 'Graphics (GPU)' 'false' ''
+    New-PerfSetting 'enableMotionBlur' 'Motion blur (true/false)' 'Graphics (GPU)' 'false' ''
+    New-PerfSetting 'enableDof' 'Depth of field (true/false)' 'Graphics (GPU)' 'false' ''
+    New-PerfSetting 'enableLensEffects' 'Lens effects (true/false)' 'Graphics (GPU)' 'false' ''
+    New-PerfSetting 'allowDynamicReflections' 'Dynamic reflections (true/false)' 'Graphics (GPU)' 'false' ''
+    New-PerfSetting 'shadowFilterDetail' 'Shadow filtering (0-4)' 'Graphics (GPU)' '2' ''
+    New-PerfSetting 'overallDetailLevel' 'Overall detail (0-3)' 'World detail (CPU)' $null ''
+    New-PerfSetting 'lodDetailLevel' 'Level of detail (0-2)' 'World detail (CPU)' '1' ''
+    New-PerfSetting 'lodTrackLevel' 'Track detail (0-2)' 'World detail (CPU)' $null ''
+    New-PerfSetting 'particleDetailLevel' 'Particles (0-2)' 'World detail (CPU)' '1' ''
+)
+
+# Falcon BMS: changes go in "Falcon BMS User.cfg", which BMS reads after "Falcon BMS.cfg" and an update never replaces
+$BmsSettings = @(
+    New-PerfSetting 'g_fVRResolution' 'VR resolution multiplier' 'Resolution & timing' $null '1.0 = the headset resolution.'
+    New-PerfSetting 'g_bVRParallelRenderThread' 'Multi-threaded VR rendering (1 = on)' 'Resolution & timing' '1' 'Higher frame rate; 0 = lower latency.'
+    New-PerfSetting 'g_nVRExternalRenderingMode' 'Outside world rendering (0-2)' 'Resolution & timing' $null '0 = mixed (stereo near the ground), 1 = always mono (fastest), 2 = always stereo.'
+    New-PerfSetting 'g_bVRNoPresent' 'No desktop mirror window (1 = none)' 'Desktop window' $null 'Skips drawing the desktop window. Saves a little GPU time, but you will not see the sim on your monitor.'
+    New-PerfSetting 'g_bNewTerrainRenderGrass' 'Grass (1 = on)' 'World detail (CPU)' '0' ''
+    New-PerfSetting 'g_fNewTerrainProceduralDistance' 'Procedural terrain distance (km)' 'World detail (CPU)' '8.0' 'Heavy at low altitude. BMS default is 12.'
+    New-PerfSetting 'g_nNewTerrainHiresTilesDistKM' 'High-res terrain distance (0, 16 or 32 km)' 'World detail (CPU)' $null ''
+    New-PerfSetting 'g_bShadowOnSmoke' 'Shadows on smoke (1 = on)' 'Graphics (GPU)' '0' ''
+    New-PerfSetting 'g_bEnvMapRenderClouds' 'Clouds in reflections (1 = on)' 'Graphics (GPU)' '0' ''
+)
+function Get-BmsUserCfg {
+    $dirs = @()
+    foreach ($k in 'HKLM:\SOFTWARE\WOW6432Node\Benchmark Sims', 'HKLM:\SOFTWARE\Benchmark Sims') {
+        foreach ($s in Get-ChildItem $k -ErrorAction SilentlyContinue) { $b = (Get-ItemProperty $s.PSPath -ErrorAction SilentlyContinue).baseDir; if ($b) { $dirs += $b } }
+    }
+    foreach ($dr in [IO.DriveInfo]::GetDrives() | Where-Object { $_.DriveType -eq 'Fixed' -and $_.IsReady }) { $dirs += @(Get-ChildItem $dr.RootDirectory.FullName -Directory -Filter 'Falcon BMS*' -ErrorAction SilentlyContinue | ForEach-Object FullName) }
+    foreach ($d in ($dirs | Select-Object -Unique)) { $f = Join-Path $d 'User\Config\Falcon BMS User.cfg'; if (Test-Path -LiteralPath $f) { return $f } }
+}
+
+$Docs = [Environment]::GetFolderPath('MyDocuments')
+$PerfGames = @(
+    [pscustomobject]@{ Id = 'ats'; Name = 'American Truck Simulator'; Process = 'amtrucks'; RouteMatch = '\\amtrucks\.exe|steam://\w+/270880\b'; Format = 'scs'; Settings = $ScsSettings
+                       Configs = @(Join-Path $Docs 'American Truck Simulator\config.cfg') }
+    [pscustomobject]@{ Id = 'ets2'; Name = 'Euro Truck Simulator 2'; Process = 'eurotrucks2'; RouteMatch = '\\eurotrucks2\.exe|steam://\w+/227300\b'; Format = 'scs'; Settings = $ScsSettings
+                       Configs = @(Join-Path $Docs 'Euro Truck Simulator 2\config.cfg') }
+    [pscustomobject]@{ Id = 'msfs2024'; Name = 'Microsoft Flight Simulator 2024'; Process = 'FlightSimulator2024'; RouteMatch = 'Microsoft Flight Simulator 2024\\|\\FlightSimulator2024\.exe|steam://\w+/2537590\b'; Format = 'msfs'; Settings = $MsfsSettings
+                       Configs = @((Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.Limitless_8wekyb3d8bbwe\LocalCache\UserCfg.opt'),
+                                   (Join-Path $env:APPDATA 'Microsoft Flight Simulator 2024\UserCfg.opt')) }
+    [pscustomobject]@{ Id = 'msfs2020'; Name = 'Microsoft Flight Simulator 2020'; Process = 'FlightSimulator'; RouteMatch = 'Microsoft Flight Simulator\\Content\\|\\FlightSimulator\.exe|steam://\w+/1250410\b'; Format = 'msfs'; Settings = $MsfsSettings
+                       Configs = @((Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.FlightSimulator_8wekyb3d8bbwe\LocalCache\UserCfg.opt'),
+                                   (Join-Path $env:APPDATA 'Microsoft Flight Simulator\UserCfg.opt')) }
+    [pscustomobject]@{ Id = 'dcs'; Name = 'DCS World'; Process = 'DCS'; RouteMatch = '\\DCS\.exe|steam://\w+/223750\b|DCS World'; Format = 'lua'; Settings = $DcsSettings
+                       Configs = @((Join-Path $env:USERPROFILE 'Saved Games\DCS\Config\options.lua'), (Join-Path $env:USERPROFILE 'Saved Games\DCS.openbeta\Config\options.lua')) }
+    [pscustomobject]@{ Id = 'bms'; Name = 'Falcon BMS'; Process = 'Falcon BMS'; RouteMatch = 'Falcon BMS'; Format = 'bms'; Settings = $BmsSettings
+                       Configs = @({ Get-BmsUserCfg }); BaseConfig = { param($p) Join-Path (Split-Path $p) 'Falcon BMS.cfg' } }
+    [pscustomobject]@{ Id = 'iracing'; Name = 'iRacing (VR)'; Process = @('iRacingSim64DX11', 'iRacingSim64DX12'); RouteMatch = 'iRacing'; Format = 'ini'; Settings = $IRacingSettings
+                       Configs = @(Join-Path $Docs 'iRacing\rendererDX11OpenXR.ini') }
+    [pscustomobject]@{ Id = 'ac'; Name = 'Assetto Corsa'; Process = 'acs'; RouteMatch = '\\assettocorsa\\|\\acs\.exe|steam://\w+/244210\b'; Format = 'ini'; Settings = $AcSettings
+                       Configs = @(Join-Path $Docs 'Assetto Corsa\cfg\video.ini') }
+    [pscustomobject]@{ Id = 'ams2'; Name = 'Automobilista 2'; Process = @('AMS2AVX', 'AMS2'); RouteMatch = 'Automobilista 2|steam://\w+/1066890\b'; Format = 'xmlattr'; Settings = $Ams2Settings
+                       Configs = @(Join-Path $Docs 'Automobilista 2\graphicsconfigdx11.xml') }
+    [pscustomobject]@{ Id = 'r3e'; Name = 'RaceRoom Racing Experience'; Process = 'RRRE64'; RouteMatch = 'RaceRoom|steam://\w+/211500\b'; Format = 'xmltag'; Settings = $R3eSettings
+                       Configs = @(Join-Path $Docs 'My Games\SimBin\RaceRoom Racing Experience\UserData\graphics_options.xml') }
+)
+
+function Get-PerfGame([string]$id) { $PerfGames | Where-Object { $_.Id -eq $id } | Select-Object -First 1 }
+# Where a game keeps its settings file (some are found by a small search, done once per run)
+$script:PerfPathCache = @{}
+function Get-PerfConfigPath($pg) {
+    if ($script:PerfPathCache.ContainsKey($pg.Id) -and $script:PerfPathCache[$pg.Id] -and (Test-Path -LiteralPath $script:PerfPathCache[$pg.Id])) { return $script:PerfPathCache[$pg.Id] }
+    $found = $null
+    foreach ($c in $pg.Configs) {
+        $cand = if ($c -is [scriptblock]) { & $c } else { $c }
+        if ($cand -and (Test-Path -LiteralPath $cand)) { $found = [string]$cand; break }
+    }
+    if ($found) { $script:PerfPathCache[$pg.Id] = $found }
+    return $found
+}
+
+function Write-PerfLog([string]$msg) {
+    $line = "{0:yyyy-MM-dd HH:mm:ss}  {1}{2}" -f (Get-Date), $msg, [Environment]::NewLine
+    try {
+        [IO.File]::AppendAllText($PerfLog, $line, $Utf8NoBom)
+        if ((New-Object IO.FileInfo $PerfLog).Length -gt 512KB) {
+            $keep = [IO.File]::ReadAllLines($PerfLog); [IO.File]::WriteAllLines($PerfLog, [string[]]($keep | Select-Object -Last 2000), $Utf8NoBom)
+        }
+    } catch {
+        try { [IO.File]::AppendAllText((Join-Path $env:TEMP "PimaxGameManager-performance.log"), "$line  (log error: $($_.Exception.Message))$([Environment]::NewLine)") } catch { }
+    }
+}
+
+# performance.json: { guard: true/false, games: { <id>: { lock, values{key:value}, pinCores, keepWindow } } }
+function Read-PerfConfig {
+    $cfg = [pscustomobject]@{ guard = $false; games = [ordered]@{} }
+    if (Test-Path -LiteralPath $PerfFile) {
+        try {
+            $j = [IO.File]::ReadAllText($PerfFile).TrimStart([char]0xFEFF) | ConvertFrom-Json
+            $cfg.guard = [bool]$j.guard
+            foreach ($p in @($j.games.PSObject.Properties)) {
+                $vals = [ordered]@{}
+                foreach ($v in @($p.Value.values.PSObject.Properties)) { $vals[$v.Name] = [string]$v.Value }
+                $cfg.games[$p.Name] = [pscustomobject]@{ lock = [bool]$p.Value.lock; values = $vals; pinCores = [bool]$p.Value.pinCores; keepWindow = [bool]$p.Value.keepWindow }
+            }
+        } catch { Write-PerfLog "performance.json could not be read: $($_.Exception.Message)" }
+    }
+    return $cfg
+}
+function Save-PerfConfig($cfg) {
+    $games = [ordered]@{}
+    foreach ($k in $cfg.games.Keys) { $g = $cfg.games[$k]; $games[$k] = [ordered]@{ lock = [bool]$g.lock; pinCores = [bool]$g.pinCores; keepWindow = [bool]$g.keepWindow; values = $g.values } }
+    $json = [ordered]@{ guard = [bool]$cfg.guard; games = $games } | ConvertTo-Json -Depth 6
+    [IO.File]::WriteAllText($PerfFile, $json, $Utf8NoBom)
+}
+function Get-PerfEntry($cfg, [string]$id) {
+    if (-not $cfg.games.Contains($id)) { $cfg.games[$id] = [pscustomobject]@{ lock = $false; values = [ordered]@{}; pinCores = $false; keepWindow = $false } }
+    return $cfg.games[$id]
+}
+
+# Text of a game's config file, keeping its encoding and line endings when written back
+function Read-TextKeep([string]$path) {
+    $bytes = [IO.File]::ReadAllBytes($path)
+    $bom = ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
+    $text = (New-Object Text.UTF8Encoding($false)).GetString($bytes, $(if ($bom) { 3 } else { 0 }), $bytes.Length - $(if ($bom) { 3 } else { 0 }))
+    [pscustomobject]@{ Text = $text; Bom = $bom; Nl = $(if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }) }
+}
+function Write-TextKeep([string]$path, $doc, [string]$text) { [IO.File]::WriteAllText($path, $text, (New-Object Text.UTF8Encoding($doc.Bom))) }
+
+# Settings files come in a few formats. Each line that holds a setting is split into
+# Pre + Val + Post, so a value can be replaced without touching anything else on the line.
+#   scs      uset r_ssao "2"                          (American / Euro Truck Simulator)
+#   msfs     {Section ... Key value ... }             (Microsoft Flight Simulator UserCfg.opt)
+#   ini      [Section] Key=Value ; comment            (iRacing, Assetto Corsa)
+#   lua      ["section"] = { ["key"] = value, }       (DCS World options.lua)
+#   xmlattr  <prop name="Key" key="value" />          (Automobilista 2)
+#   xmltag   <key type="...">value</key>              (RaceRoom)
+#   bms      set g_key value // comment               (Falcon BMS)
+# Keys are Section/Key paths where the format has sections.
+function Split-PerfLines($pg, [string]$text) {
+    $stack = New-Object System.Collections.Generic.List[string]
+    $lines = $text -split "`r?`n"
+    $out = New-Object System.Collections.Generic.List[object]
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $line = $lines[$i]; $t = $line.Trim(); $m = $null; $key = $null
+        switch ($pg.Format) {
+            'scs' { $m = [regex]::Match($line, '^(\s*uset\s+)(\S+)(\s+")([^"]*)(".*)$'); if ($m.Success) { $key = $m.Groups[2].Value; $pre = $m.Groups[1].Value + $key + $m.Groups[3].Value; $val = $m.Groups[4].Value; $post = $m.Groups[5].Value } }
+            'msfs' {
+                if ($t.StartsWith('{')) { $stack.Add($t.Substring(1).Trim()); continue }
+                if ($t -eq '}') { if ($stack.Count) { $stack.RemoveAt($stack.Count - 1) }; continue }
+                $m = [regex]::Match($line, '^(\s*)(\S+)(\s+)(.*?)(\s*)$')
+                if ($m.Success) { $key = (@($stack) + $m.Groups[2].Value) -join '/'; $pre = $m.Groups[1].Value + $m.Groups[2].Value + $m.Groups[3].Value; $val = $m.Groups[4].Value; $post = $m.Groups[5].Value }
+            }
+            'ini' {
+                $s = [regex]::Match($line, '^\s*\[(.+?)\]'); if ($s.Success) { $stack.Clear(); $stack.Add($s.Groups[1].Value); continue }
+                $m = [regex]::Match($line, '^(\s*)([^=;#\[\s][^=]*?)(\s*=\s*)(.*?)(\s*(?:;.*)?)$')
+                if ($m.Success) { $key = (@($stack) + $m.Groups[2].Value) -join '/'; $pre = $m.Groups[1].Value + $m.Groups[2].Value + $m.Groups[3].Value; $val = $m.Groups[4].Value; $post = $m.Groups[5].Value }
+            }
+            'lua' {
+                if ($t -match '^\["([^"]+)"\]\s*=\s*\{\s*$') { $stack.Add($Matches[1]); continue }
+                if ($t -match '^\},?$') { if ($stack.Count) { $stack.RemoveAt($stack.Count - 1) }; continue }
+                $m = [regex]::Match($line, '^(\s*\["([^"]+)"\]\s*=\s*)(.*?)(,?\s*)$')
+                if ($m.Success) { $key = (@($stack) + $m.Groups[2].Value) -join '/'; $pre = $m.Groups[1].Value; $val = $m.Groups[3].Value; $post = $m.Groups[4].Value }
+            }
+            'xmlattr' { $m = [regex]::Match($line, '^(\s*<prop name="([^"]+)" (?!type=)[A-Za-z_]+=")([^"]*)(".*)$'); if ($m.Success) { $key = $m.Groups[2].Value; $pre = $m.Groups[1].Value; $val = $m.Groups[3].Value; $post = $m.Groups[4].Value } }
+            'xmltag' { $m = [regex]::Match($line, '^(\s*<([A-Za-z_][\w]*) type="[^"]*">)([^<]*)(</\2>.*)$'); if ($m.Success) { $key = $m.Groups[2].Value; $pre = $m.Groups[1].Value; $val = $m.Groups[3].Value; $post = $m.Groups[4].Value } }
+            'bms' { $m = [regex]::Match($line, '^(\s*set\s+)(\S+)(\s+)(\S+)(.*)$'); if ($m.Success) { $key = $m.Groups[2].Value; $pre = $m.Groups[1].Value + $key + $m.Groups[3].Value; $val = $m.Groups[4].Value; $post = $m.Groups[5].Value } }
+        }
+        if ($key) { $out.Add([pscustomobject]@{ Index = $i; Key = $key; Pre = $pre; Val = $val; Post = $post }) }
+    }
+    return [pscustomobject]@{ Lines = $lines; Items = $out }
+}
+
+# DCS writes text values in quotes; they are shown and stored without them
+function ConvertFrom-PerfRaw($pg, [string]$v) { if ($pg.Format -eq 'lua' -and $v -match '^"(.*)"$') { return $Matches[1] }; return $v }
+function ConvertTo-PerfRaw($pg, [string]$v, [string]$old) {
+    if ($pg.Format -eq 'lua' -and $old -match '^".*"$' -and $v -notmatch '^".*"$') { return '"' + $v + '"' }
+    return $v
+}
+
+# All values in a game's config file, as key -> value. Falcon BMS also reads its main file under the user file.
+function Read-PerfValues($pg, [string]$path) {
+    $vals = @{}
+    $files = @(); if ($pg.BaseConfig -and (Test-Path -LiteralPath (& $pg.BaseConfig $path))) { $files += (& $pg.BaseConfig $path) }; $files += $path
+    foreach ($f in $files) {
+        $p = Split-PerfLines $pg (Read-TextKeep $f).Text
+        foreach ($it in $p.Items) { $vals[$it.Key] = (ConvertFrom-PerfRaw $pg $it.Val) }
+    }
+    return $vals
+}
+
+# Puts the wanted values into the file. Returns the changes made ("key old->new"); writes nothing if all match.
+# Formats where a missing line is fine to add (the game reads it like any other) get it appended.
+function Set-PerfValues($pg, [string]$path, $want, [switch]$WhatIf) {
+    $doc = Read-TextKeep $path
+    $p = Split-PerfLines $pg $doc.Text
+    $lines = $p.Lines; $changes = New-Object System.Collections.Generic.List[string]; $seen = @{}
+    foreach ($it in $p.Items) {
+        if (-not $want.Contains($it.Key)) { continue }
+        $seen[$it.Key] = $true
+        $old = ConvertFrom-PerfRaw $pg $it.Val; $v = [string]$want[$it.Key]
+        if ($old -ne $v) {
+            $lines[$it.Index] = $it.Pre + (ConvertTo-PerfRaw $pg $v $it.Val) + $it.Post
+            $changes.Add("$($it.Key) $old->$v")
+        }
+    }
+    $text = $lines -join $doc.Nl
+    if ($pg.Format -in 'scs', 'bms') {
+        foreach ($k in @($want.Keys)) {
+            if ($seen.ContainsKey($k)) { continue }
+            $line = if ($pg.Format -eq 'scs') { "uset $k `"$($want[$k])`"" } else { "set $k $($want[$k])" }
+            $changes.Add("$k (added) $($want[$k])"); $text = $text.TrimEnd("`r", "`n") + $doc.Nl + $line + $doc.Nl
+        }
+    }
+    if ($changes.Count -and -not $WhatIf) {
+        $dir = Join-Path $PerfBackupDir $pg.Id
+        if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force $dir | Out-Null }
+        Copy-Item -LiteralPath $path (Join-Path $dir ("{0:yyyyMMdd-HHmmss}-{1}" -f (Get-Date), [IO.Path]::GetFileName($path)))
+        Get-ChildItem $dir -File | Sort-Object LastWriteTime -Descending | Select-Object -Skip 20 | Remove-Item -ErrorAction SilentlyContinue
+        Write-TextKeep $path $doc $text
+    }
+    return $changes.ToArray()      # callers wrap it in @() to count
+}
+
+try {
+    Add-Type -ErrorAction Stop -TypeDefinition @'
+using System; using System.Runtime.InteropServices;
+namespace PGMPerf {
+  public static class Cpu {
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool GetLogicalProcessorInformationEx(int rel, IntPtr buf, ref int len);
+    // Logical processors of the fastest core type (Intel P-cores) as an affinity mask; 0 if all cores are the same
+    public static long PerformanceCoreMask() {
+      int len = 0; GetLogicalProcessorInformationEx(0, IntPtr.Zero, ref len);
+      if (len <= 0) return 0;
+      IntPtr buf = Marshal.AllocHGlobal(len);
+      try {
+        if (!GetLogicalProcessorInformationEx(0, buf, ref len)) return 0;
+        long[] masks = new long[256]; int maxCls = -1, minCls = 256; int off = 0;
+        while (off < len) {
+          int size = Marshal.ReadInt32(buf, off + 4);
+          int cls = Marshal.ReadByte(buf, off + 9);
+          long mask = Marshal.ReadInt64(buf, off + 32);
+          if (Marshal.ReadInt16(buf, off + 40) == 0) {           // GroupMask[0].Group == 0
+            masks[cls] |= mask; if (cls > maxCls) maxCls = cls; if (cls < minCls) minCls = cls;
+          }
+          off += size;
+        }
+        return (maxCls > minCls) ? masks[maxCls] : 0;
+      } finally { Marshal.FreeHGlobal(buf); }
+    }
+  }
+  public static class Win {
+    public delegate bool EnumProc(IntPtr h, IntPtr l);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc p, IntPtr l);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);
+    [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr a, int x, int y, int cx, int cy, uint f);
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
+    public static System.Collections.Generic.List<IntPtr> VisibleWindowsOf(uint pid) {
+      var list = new System.Collections.Generic.List<IntPtr>();
+      EnumWindows((h, l) => { uint p; GetWindowThreadProcessId(h, out p); if (p == pid && IsWindowVisible(h)) list.Add(h); return true; }, IntPtr.Zero);
+      return list;
+    }
+  }
+}
+'@
+} catch { }
+function Get-PCoreMask { try { [long][PGMPerf.Cpu]::PerformanceCoreMask() } catch { 0L } }
+function Get-PCoreText([long]$mask) {
+    if (-not $mask) { return '' }
+    $ids = for ($i = 0; $i -lt 64; $i++) { if ($mask -band ([long]1 -shl $i)) { $i } }
+    "logical processors {0}-{1}" -f $ids[0], $ids[-1]
+}
+
+# Running copies of a game (ignores a half-closed leftover that no longer uses any memory)
+function Get-PerfProcesses($pg) { @(Get-Process -Name $pg.Process -ErrorAction SilentlyContinue | Where-Object { $_.WorkingSet64 -gt 50MB }) }
+
+# Moves a game's desktop window back onto the screen if any part of it is outside the visible desktop
+function Repair-GameWindow([int]$procId) {
+    Add-Type -AssemblyName System.Windows.Forms
+    $area = [Windows.Forms.SystemInformation]::VirtualScreen
+    $moved = $false
+    foreach ($h in [PGMPerf.Win]::VisibleWindowsOf([uint32]$procId)) {
+        if ([PGMPerf.Win]::IsIconic($h)) { continue }
+        $r = New-Object PGMPerf.Win+RECT; [void][PGMPerf.Win]::GetWindowRect($h, [ref]$r)
+        if (($r.R - $r.L) -lt 200 -or ($r.B - $r.T) -lt 150) { continue }
+        if ($r.L -lt $area.Left -or $r.T -lt $area.Top -or $r.R -gt $area.Right -or $r.B -gt $area.Bottom) {
+            $wa = [Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+            $w = [Math]::Min(960, $wa.Width - 80); $hgt = [Math]::Min(540, $wa.Height - 80)
+            [void][PGMPerf.Win]::ShowWindow($h, 1)
+            [void][PGMPerf.Win]::SetWindowPos($h, [IntPtr]::Zero, $wa.Left + 40, $wa.Top + 40, $w, $hgt, 0x0014)
+            $moved = $true
+        }
+    }
+    return $moved
+}
+
+# Locked settings for every game that is closed right now. Returns a short summary per game that changed.
+function Invoke-PerfEnforce($cfg, [switch]$Force) {
+    $out = @()
+    foreach ($id in @($cfg.games.Keys)) {
+        $e = $cfg.games[$id]; $pg = Get-PerfGame $id
+        if (-not $pg -or -not $e.lock -or -not $e.values.Count) { continue }
+        $path = Get-PerfConfigPath $pg
+        if (-not $path) { continue }
+        if ((Get-PerfProcesses $pg).Count) { continue }    # the game rewrites its file when it quits
+        if (-not $Force -and ((Get-Date) - (Get-Item -LiteralPath $path).LastWriteTime).TotalSeconds -lt 5) { continue }
+        try {
+            $ch = @(Set-PerfValues $pg $path $e.values)
+            if ($ch.Count) { Write-PerfLog "$($pg.Name): put back $($ch.Count) setting(s): $($ch -join '; ')"; $out += [pscustomobject]@{ Game = $pg.Name; Count = $ch.Count } }
+        } catch { Write-PerfLog "$($pg.Name): couldn't update $path - $($_.Exception.Message)" }
+    }
+    return $out
+}
+
+# ---- Performance Guard: start / stop / start with Windows ----
+# How to start this app in guard mode: the exe with -Guard, or PowerShell running this script with -Guard
+function Get-GuardLaunch {
+    $exe = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    if ([IO.Path]::GetFileNameWithoutExtension($exe) -ieq 'PimaxGameManager') { return [pscustomobject]@{ Exe = $exe; Args = '-Guard' } }
+    $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    return [pscustomobject]@{ Exe = $ps; Args = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`" -Guard" }
+}
+function Test-GuardRunning {
+    $m = $null
+    try { if ([Threading.Mutex]::TryOpenExisting($GuardMutex, [ref]$m)) { $m.Dispose(); return $true } } catch [UnauthorizedAccessException] { return $true } catch { }
+    return $false
+}
+# A scheduled task starts the guard at logon with the app's admin rights but without a prompt
+function Register-GuardTask([bool]$atLogon) {
+    $l = Get-GuardLaunch
+    $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $action    = New-ScheduledTaskAction -Execute $l.Exe -Argument $l.Args
+    $trigger   = New-ScheduledTaskTrigger -AtLogOn -User $user
+    $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest
+    $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -Priority 7
+    $task = Register-ScheduledTask -TaskName $GuardTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings `
+        -Description 'Keeps game settings locked and runs games on the performance cores (Pimax Game Manager).' -Force
+    if (-not $atLogon) { [void](Disable-ScheduledTask -TaskName $GuardTask) }
+    return $task
+}
+function Get-GuardTask { Get-ScheduledTask -TaskName $GuardTask -ErrorAction SilentlyContinue }
+function Start-Guard {
+    if (Test-GuardRunning) { return }
+    $t = Get-GuardTask
+    if (-not $t) { $t = Register-GuardTask $true }
+    $wasDisabled = ($t.State -eq 'Disabled')
+    if ($wasDisabled) { [void](Enable-ScheduledTask -TaskName $GuardTask) }
+    Start-ScheduledTask -TaskName $GuardTask
+    if ($wasDisabled) { Start-Sleep -Milliseconds 400; [void](Disable-ScheduledTask -TaskName $GuardTask) }
+}
+function Stop-Guard {
+    foreach ($p in Get-CimInstance Win32_Process -Filter "Name='PimaxGameManager.exe' OR Name='powershell.exe'" -ErrorAction SilentlyContinue) {
+        if ($p.ProcessId -ne $PID -and $p.CommandLine -match '(?i)\s-Guard\b') { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+    }
+}
+# Keeps the scheduled task pointing at this copy of the app (after an update or if the exe was moved)
+function Update-GuardTask {
+    $t = Get-GuardTask
+    if (-not $t) { return }
+    $l = Get-GuardLaunch
+    $a = $t.Actions | Select-Object -First 1
+    if ($a.Execute -ne $l.Exe -or $a.Arguments -ne $l.Args) { [void](Register-GuardTask ($t.State -ne 'Disabled')) }
+}
+
+# ---- The guard itself: tray icon + a 3-second timer. Uses very little CPU; nothing runs while it waits. ----
+function Start-PerfGuard {
+    $script:gMutex = New-Object Threading.Mutex($false, $GuardMutex)
+    $mine = $false
+    try { $mine = $script:gMutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $mine = $true }   # a previous guard was ended without closing
+    if (-not $mine) { return }                               # already running
+    Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+    [Windows.Forms.Application]::EnableVisualStyles()
+    Write-PerfLog "Performance Guard started (version $AppVersion)"
+
+    $script:gPaused = $false; $script:gCfg = Read-PerfConfig; $script:gCfgTime = [datetime]::MinValue
+    $script:gPinned = @{}; $script:gSeen = @{}; $script:gLastEnforce = [datetime]::MinValue
+    $script:gMask = Get-PCoreMask
+
+    $exe = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    $icon = $null
+    try { if ([IO.Path]::GetFileNameWithoutExtension($exe) -ieq 'PimaxGameManager') { $icon = [Drawing.Icon]::ExtractAssociatedIcon($exe) }
+          elseif (Test-Path (Join-Path $PSScriptRoot 'PimaxGameManager.ico')) { $icon = New-Object Drawing.Icon (Join-Path $PSScriptRoot 'PimaxGameManager.ico') } } catch { }
+    if (-not $icon) { $icon = [Drawing.SystemIcons]::Application }
+    $script:gIconOn = $icon; $script:gIconOff = [Drawing.SystemIcons]::Warning
+
+    $script:gTray = New-Object Windows.Forms.NotifyIcon
+    $menu = New-Object Windows.Forms.ContextMenuStrip
+    $script:gHeader = New-Object Windows.Forms.ToolStripMenuItem('Performance Guard'); $script:gHeader.Enabled = $false
+    [void]$menu.Items.Add($script:gHeader); [void]$menu.Items.Add('-')
+    $script:gToggle = $menu.Items.Add('Pause')
+    $miCheck = $menu.Items.Add('Put locked settings back now')
+    $miApp   = $menu.Items.Add('Open Pimax Game Manager')
+    $miLog   = $menu.Items.Add('Open log')
+    [void]$menu.Items.Add('-')
+    $miExit  = $menu.Items.Add('Exit (until next sign-in)')
+    $script:gTray.ContextMenuStrip = $menu
+
+    $script:gUpdate = {
+        $locked = @($script:gCfg.games.Keys | Where-Object { $script:gCfg.games[$_].lock -or $script:gCfg.games[$_].pinCores -or $script:gCfg.games[$_].keepWindow } |
+                    ForEach-Object { (Get-PerfGame $_).Name } | Where-Object { $_ })
+        $state = if ($script:gPaused) { 'paused' } else { 'on' }
+        $script:gTray.Icon = if ($script:gPaused) { $script:gIconOff } else { $script:gIconOn }
+        $tip = "Performance Guard - $state"; if ($locked.Count) { $tip += " (" + ($locked -join ', ') + ")" }
+        $script:gTray.Text = $tip.Substring(0, [Math]::Min(63, $tip.Length))
+        $script:gHeader.Text = "Performance Guard - $state"
+        $script:gToggle.Text = if ($script:gPaused) { 'Resume' } else { 'Pause' }
+    }
+    $script:gToggle.add_Click({
+        $script:gPaused = -not $script:gPaused; & $script:gUpdate
+        Write-PerfLog $(if ($script:gPaused) { 'Paused from the tray' } else { 'Resumed from the tray' })
+        $script:gTray.ShowBalloonTip(2500, 'Performance Guard', $(if ($script:gPaused) { 'Paused. Game settings will not be changed until you resume or sign in again.' } else { 'Running. Locked settings are kept.' }), 'Info')
+    })
+    $miCheck.add_Click({
+        $script:gCfg = Read-PerfConfig
+        $r = @(Invoke-PerfEnforce $script:gCfg -Force)
+        $msg = if ($r.Count) { ($r | ForEach-Object { "$($_.Game): $($_.Count) setting(s) put back" }) -join "`n" } else { 'Everything already matches (games that are running are skipped).' }
+        $script:gTray.ShowBalloonTip(3000, 'Performance Guard', $msg, 'Info')
+    })
+    $miApp.add_Click({
+        $l = Get-GuardLaunch
+        if ($l.Exe -like '*powershell.exe') { Start-Process $l.Exe -ArgumentList ($l.Args -replace '\s-Guard$', '') } else { Start-Process $l.Exe }
+    })
+    $miLog.add_Click({ if (-not (Test-Path $PerfLog)) { Write-PerfLog 'Log created' }; Start-Process notepad.exe $PerfLog })
+    $miExit.add_Click({ Write-PerfLog 'Exited from the tray'; $script:gTimer.Stop(); $script:gTray.Visible = $false; [Windows.Forms.Application]::Exit() })
+    $script:gTray.add_DoubleClick({ $miApp.PerformClick() })
+
+    $script:gTimer = New-Object Windows.Forms.Timer
+    $script:gTimer.Interval = 3000
+    $script:gTimer.add_Tick({
+        try {
+            $t = if (Test-Path $PerfFile) { (Get-Item -LiteralPath $PerfFile).LastWriteTime } else { [datetime]::MinValue }
+            if ($t -ne $script:gCfgTime) { $script:gCfg = Read-PerfConfig; $script:gCfgTime = $t; & $script:gUpdate }
+            if ($script:gPaused) { return }
+            foreach ($id in @($script:gCfg.games.Keys)) {
+                $e = $script:gCfg.games[$id]; $pg = Get-PerfGame $id
+                if (-not $pg) { continue }
+                foreach ($p in (Get-PerfProcesses $pg)) {
+                    if (-not $script:gPinned.ContainsKey($p.Id)) {
+                        $script:gPinned[$p.Id] = $true; $script:gSeen[$p.Id] = Get-Date
+                        if ($e.pinCores -and $script:gMask) {
+                            try { $p.ProcessorAffinity = [IntPtr]$script:gMask; $p.PriorityClass = 'AboveNormal'; Write-PerfLog "$($pg.Name) started: running on the performance cores ($(Get-PCoreText $script:gMask)), priority above normal" }
+                            catch { Write-PerfLog "$($pg.Name): couldn't set the cores - $($_.Exception.Message)" }
+                        }
+                    }
+                    if ($e.keepWindow -and ((Get-Date) - $script:gSeen[$p.Id]).TotalMinutes -lt 5) {
+                        try { if (Repair-GameWindow $p.Id) { Write-PerfLog "$($pg.Name): moved its desktop window back on screen" } } catch { }
+                    }
+                }
+            }
+            if (((Get-Date) - $script:gLastEnforce).TotalSeconds -ge 10) {
+                $script:gLastEnforce = Get-Date
+                $r = @(Invoke-PerfEnforce $script:gCfg)
+                if ($r.Count) { $script:gTray.ShowBalloonTip(3000, 'Performance Guard', (($r | ForEach-Object { "$($_.Game): $($_.Count) setting(s) put back" }) -join "`n"), 'Info') }
+            }
+        } catch { Write-PerfLog "Guard error: $($_.Exception.Message)" }
+    })
+
+    & $script:gUpdate
+    $script:gTray.Visible = $true
+    $script:gTimer.Start()
+    [Windows.Forms.Application]::Run()
+    $script:gTray.Dispose()
+    try { $script:gMutex.ReleaseMutex() } catch { }
+}
+
+# Started with -Guard: run the Performance Guard in the tray and nothing else
+if ($Guard) {
+    try { Start-PerfGuard } catch { Write-PerfLog "Performance Guard stopped after an error: $($_.Exception.Message)" }
+    exit
+}
 
 # ---------- Library ----------
 # -WithPending shows the library as it will be once the waiting changes are applied (see "Waiting changes" below)
@@ -936,6 +1559,7 @@ $ThemeXaml = @'
     <Geometry x:Key="IcoArrowLeft">M19 12 H5 M11 6 L5 12 L11 18</Geometry>
     <Geometry x:Key="IcoPlus">M12 5 V19 M5 12 H19</Geometry>
     <Geometry x:Key="IcoPlay">M7.5 4.5 L19 12 L7.5 19.5 Z</Geometry>
+    <Geometry x:Key="IcoGauge">M3.5 17.5 A9 9 0 1 1 20.5 17.5 M12 14.5 L16.5 9 M12 13 a1.5 1.5 0 1 1 0 3 a1.5 1.5 0 1 1 0 -3 Z</Geometry>
     <Geometry x:Key="IcoEdit">M4 20 H8.5 L19.5 9 C20.3 8.2 20.3 6.8 19.5 6 L18 4.5 C17.2 3.7 15.8 3.7 15 4.5 L4 15.5 Z M13.5 6 L18 10.5</Geometry>
     <Style TargetType="ToolTip">
       <Setter Property="Background" Value="#1B1F28"/><Setter Property="Foreground" Value="#E8EBF2"/>
@@ -1206,7 +1830,7 @@ $ThemeXaml = @'
         <Image Source="{StaticResource LogoImage}" Height="34" Margin="0,0,14,0" VerticalAlignment="Center"/>
         <StackPanel VerticalAlignment="Center">
           <TextBlock FontSize="21" FontWeight="SemiBold"><Run Text="Pimax"/><Run Text=" Game Manager" Foreground="{StaticResource LogoGrad}"/></TextBlock>
-          <TextBlock Text="Play &amp; add games  &#183;  library images  &#183;  library order  &#183;  game settings  &#183;  backups" Foreground="#8B93A5" FontSize="12" Margin="1,1,0,0"/>
+          <TextBlock Text="Play &amp; add games  &#183;  library images  &#183;  library order  &#183;  game settings  &#183;  performance  &#183;  backups" Foreground="#8B93A5" FontSize="12" Margin="1,1,0,0"/>
         </StackPanel>
       </DockPanel>
       <Border Grid.Row="1" Height="1" Margin="0,14,0,0" Background="{StaticResource LineGrad}"/>
@@ -1251,7 +1875,7 @@ $ThemeXaml = @'
         </DockPanel>
         <Grid DockPanel.Dock="Bottom" Margin="0,10,0,0">
           <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="8"/><ColumnDefinition/></Grid.ColumnDefinitions>
-          <Grid.RowDefinitions><RowDefinition/><RowDefinition Height="8"/><RowDefinition/><RowDefinition Height="8"/><RowDefinition/></Grid.RowDefinitions>
+          <Grid.RowDefinitions><RowDefinition/><RowDefinition Height="8"/><RowDefinition/><RowDefinition Height="8"/><RowDefinition/><RowDefinition Height="8"/><RowDefinition/></Grid.RowDefinitions>
           <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoPlus}" x:Name="AddBtn" Grid.Row="0" Grid.Column="0" Content="Add games..."
                   Padding="8,8" Background="#0F2A33" BorderBrush="#1E6A7A" ToolTip="Add games to Pimax Play: pick .exe files or shortcuts, or scan a folder"/>
           <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoEdit}" x:Name="EditBtn" Grid.Row="0" Grid.Column="2" Content="Edit / remove..."
@@ -1262,6 +1886,8 @@ $ThemeXaml = @'
                   Padding="8,8" Background="#1B2A4A" BorderBrush="#2F4F8F"/>
           <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoRefresh}" x:Name="RefreshBtn" Grid.Row="4" Grid.Column="0" Content="Refresh list" Padding="8,8"/>
           <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoArchive}" x:Name="BackupBtn" Grid.Row="4" Grid.Column="2" Content="Backup &amp; restore..." Padding="8,8"/>
+          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoGauge}" x:Name="PerfBtn" Grid.Row="6" Grid.Column="0" Grid.ColumnSpan="3" Content="Performance..."
+                  Padding="8,8" Background="#2A1F3D" BorderBrush="#6D4BB3" ToolTip="Lock a game's own graphics settings (truck, racing and flight sims), run it on the performance cores, keep its window on screen"/>
         </Grid>
         <ListBox x:Name="GameList" Background="Transparent" BorderThickness="0" Padding="0"/>
       </DockPanel>
@@ -1318,7 +1944,7 @@ $ThemeXaml = @'
 '@).Replace('__THEME__', $ThemeXaml)
 $window = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $xaml))
 $ui = @{}
-foreach ($n in 'GameList','PlayBtn','AddBtn','EditBtn','RefreshBtn','OrderBtn','SettingsBtn','GameTitle','GameInfo','SourceBox','BrowseBtn','PreviewBtn','FindBtn','KeyBtn','ApplyBtn','RestoreBtn','RestartBtn','PreviewImg','NoImage','Status','UpdateBar','UpdateText','UpdateBtn','UpdateClose','VersionLabel','ReportLink','TutorialLink','LibCount','BackupBtn','ResetBar','ResetText','ResetRestore','ResetDismiss','PendingBar','PendingText','PendingApply','PendingDiscard') { $ui[$n] = $window.FindName($n) }
+foreach ($n in 'GameList','PlayBtn','PerfBtn','AddBtn','EditBtn','RefreshBtn','OrderBtn','SettingsBtn','GameTitle','GameInfo','SourceBox','BrowseBtn','PreviewBtn','FindBtn','KeyBtn','ApplyBtn','RestoreBtn','RestartBtn','PreviewImg','NoImage','Status','UpdateBar','UpdateText','UpdateBtn','UpdateClose','VersionLabel','ReportLink','TutorialLink','LibCount','BackupBtn','ResetBar','ResetText','ResetRestore','ResetDismiss','PendingBar','PendingText','PendingApply','PendingDiscard') { $ui[$n] = $window.FindName($n) }
 $window.Title = "Pimax Game Manager $AppVersion"
 $window.Add_SourceInitialized({ Set-DarkTitleBar $this })
 
@@ -2203,6 +2829,270 @@ $ui.SettingsBtn.Add_Click({
     if ($script:Pending.Count -ne $before) { Fill-List }
 })
 
+
+# ---------- Performance window ----------
+function Show-Performance([string]$startId) {
+    $script:pw2 = New-DarkWindow 'Performance' 1180 760 @'
+  <Grid Margin="14">
+    <Grid.ColumnDefinitions><ColumnDefinition Width="320"/><ColumnDefinition Width="14"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+    <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+    <DockPanel Grid.Column="0">
+      <TextBlock DockPanel.Dock="Top" Text="Games" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,8"/>
+      <Border DockPanel.Dock="Bottom" Margin="0,10,0,0" Background="#14171E" BorderBrush="#222733" BorderThickness="1" CornerRadius="10" Padding="12,10">
+        <StackPanel>
+          <TextBlock Text="Performance Guard" FontWeight="SemiBold" FontSize="14"/>
+          <TextBlock Foreground="#8B93A5" TextWrapping="Wrap" Margin="0,3,0,8" FontSize="12"
+                     Text="Runs quietly in the tray: puts locked settings back while a game is closed and applies the core and window options when it starts."/>
+          <CheckBox x:Name="GuardOn" Content="Run it, and start it with Windows"/>
+          <TextBlock x:Name="GuardState" Margin="26,4,0,0" FontSize="12" Foreground="#8B93A5"/>
+          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoList}" x:Name="OpenLog" Content="Open log" Margin="0,10,0,0" HorizontalAlignment="Left" Padding="10,5"/>
+        </StackPanel>
+      </Border>
+      <ListBox x:Name="Targets" Background="#161A21" Foreground="#E8EBF2" BorderBrush="#262C38"/>
+    </DockPanel>
+    <DockPanel Grid.Column="2">
+      <TextBlock x:Name="Title" DockPanel.Dock="Top" FontSize="18" FontWeight="SemiBold"/>
+      <TextBlock x:Name="Info" DockPanel.Dock="Top" Foreground="#8B93A5" TextWrapping="Wrap" Margin="0,2,0,10"/>
+      <Border DockPanel.Dock="Top" Background="#14171E" BorderBrush="#222733" BorderThickness="1" CornerRadius="10" Padding="12,10" Margin="0,0,0,10">
+        <StackPanel>
+          <CheckBox x:Name="PinCores" Content="Run the game on the performance cores only"/>
+          <TextBlock x:Name="PinInfo" Margin="26,2,0,8" FontSize="12" Foreground="#8B93A5" TextWrapping="Wrap"/>
+          <CheckBox x:Name="KeepWindow" Content="Keep the game's desktop window on screen"/>
+          <TextBlock Margin="26,2,0,8" FontSize="12" Foreground="#8B93A5" TextWrapping="Wrap"
+                     Text="If the game opens its window off the edge of the monitor (for example where a second screen used to be), it is moved back and made small."/>
+          <CheckBox x:Name="LockOn" Content="Lock the settings ticked below"/>
+          <TextBlock Margin="26,2,0,0" FontSize="12" Foreground="#8B93A5" TextWrapping="Wrap"
+                     Text="While the game is closed, any ticked setting that changed (a game update, a reset, or the in-game menu) is put back. A backup of the file is kept first."/>
+        </StackPanel>
+      </Border>
+      <DockPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
+        <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoSave}" x:Name="Save" DockPanel.Dock="Right" Content="Save" Background="#16A34A" BorderBrush="#22C55E" FontWeight="SemiBold"/>
+        <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoCheck}" x:Name="SaveApply" DockPanel.Dock="Right" Content="Save &amp; apply to the game now" Margin="0,0,8,0"
+                ToolTip="Save, and write the locked settings into the game's file right away (the game must be closed)"/>
+        <StackPanel Orientation="Horizontal">
+          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoGauge}" x:Name="Recommend" Content="Recommended for VR" Background="#2F6BFF" BorderBrush="#5B8CFF"
+                  ToolTip="Tick and fill in a VR starting point. Settings without a suggestion are left as they are."/>
+          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoDownload}" x:Name="UseCurrent" Content="Use current values" Margin="8,0,0,0"
+                  ToolTip="Fill the ticked settings with what the game's file has now"/>
+          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoFolder}" x:Name="OpenFile" Content="Show file" Margin="8,0,0,0"
+                  ToolTip="Open the folder with the game's settings file"/>
+        </StackPanel>
+      </DockPanel>
+      <ScrollViewer VerticalScrollBarVisibility="Auto"><Grid x:Name="Rows" Margin="0,0,8,0"/></ScrollViewer>
+    </DockPanel>
+    <TextBlock x:Name="Status" Grid.Row="1" Grid.ColumnSpan="3" Margin="0,10,0,0" Foreground="#4ADE80" TextWrapping="Wrap"
+      Text="Tick the settings you want to keep, set their values, then Save. Close the game before applying - it rewrites its file when it quits."/>
+  </Grid>
+'@
+    $w = $script:pw2
+    $script:pfTargets = $w.FindName('Targets'); $script:pfRowsGrid = $w.FindName('Rows')
+    $script:pfTitle = $w.FindName('Title'); $script:pfInfo = $w.FindName('Info'); $script:pfStatus = $w.FindName('Status')
+    $script:pfPin = $w.FindName('PinCores'); $script:pfPinInfo = $w.FindName('PinInfo'); $script:pfKeep = $w.FindName('KeepWindow'); $script:pfLock = $w.FindName('LockOn')
+    $script:pfGuardOn = $w.FindName('GuardOn'); $script:pfGuardState = $w.FindName('GuardState')
+    $script:pfSay = { param([string]$m, [bool]$bad = $false) $script:pfStatus.Foreground = $(if ($bad) { '#F87171' } else { '#4ADE80' }); $script:pfStatus.Text = $m }
+    $script:pfCfg = Read-PerfConfig
+    $script:pfDirty = $false; $script:pfTarget = $null; $script:pfRows = @()
+    $script:pfMask = Get-PCoreMask
+
+    foreach ($pg in $PerfGames) {
+        $it = New-Object Windows.Controls.ListBoxItem; $it.Tag = $pg.Id; $it.Padding = '6,6'
+        [void]$script:pfTargets.Items.Add($it)
+    }
+    $script:pfMarks = {
+        foreach ($it in $script:pfTargets.Items) {
+            $pg = Get-PerfGame ([string]$it.Tag); $path = Get-PerfConfigPath $pg
+            $e = if ($script:pfCfg.games.Contains($pg.Id)) { $script:pfCfg.games[$pg.Id] } else { $null }
+            $on = $e -and ($e.lock -or $e.pinCores -or $e.keepWindow)
+            $it.Content = $pg.Name + $(if ($on) { '   *' } else { '' }) + $(if (-not $path) { '   (not found)' } else { '' })
+            $it.Foreground = $(if (-not $path) { '#6B7385' } else { '#E8EBF2' })
+            $it.ToolTip = $(if (-not $path) { 'Its settings file was not found on this PC' } elseif ($on) { 'Performance options are on' } else { '' })
+        }
+    }
+    $script:pfGuardShow = {
+        $t = Get-GuardTask; $running = Test-GuardRunning
+        $script:pfGuardLoading = $true
+        $script:pfGuardOn.IsChecked = [bool]($t -and $t.State -ne 'Disabled')
+        $script:pfGuardLoading = $false
+        $script:pfGuardState.Text = $(if ($running) { 'Running now (tray icon by the clock)' } else { 'Not running' })
+        $script:pfGuardState.Foreground = $(if ($running) { '#4ADE80' } else { '#8B93A5' })
+    }
+
+    # Fill the rows for one game
+    $script:pfLoad = {
+        param([string]$id)
+        $pg = Get-PerfGame $id; $script:pfTarget = $id
+        $e = Get-PerfEntry $script:pfCfg $id
+        $path = Get-PerfConfigPath $pg
+        $cur = @{}; if ($path) { try { $cur = Read-PerfValues $pg $path } catch { & $script:pfSay "Couldn't read $path - $($_.Exception.Message)" $true } }
+        $script:pfCur = $cur; $script:pfPath = $path
+        $running = (Get-PerfProcesses $pg).Count -gt 0
+        $script:pfTitle.Text = $pg.Name
+        $script:pfInfo.Text = $(if ($path) { "Settings file: $path" + $(if ($running) { "`nThe game is running now - changes to its file are made after it closes." } else { '' }) }
+                                else { "Its settings file wasn't found. Looked in:`n" + (($pg.Configs | ForEach-Object { if ($_ -is [scriptblock]) { 'the game''s install folder' } else { $_ } }) -join "`n") + "`nStart the game once so it creates the file." }) 
+        $script:pfLoading = $true
+        $script:pfPin.IsChecked = [bool]$e.pinCores; $script:pfKeep.IsChecked = [bool]$e.keepWindow; $script:pfLock.IsChecked = [bool]$e.lock
+        $script:pfPin.IsEnabled = [bool]$script:pfMask
+        $script:pfPinInfo.Text = $(if ($script:pfMask) { "Your CPU has performance and efficiency cores. The game is kept on the performance cores ($(Get-PCoreText $script:pfMask)) and given a slightly higher priority, so its main thread never lands on a slower core." }
+                                   else { "Not needed on this PC: all its CPU cores are the same type." })
+        $script:pfRowsGrid.Children.Clear(); $script:pfRowsGrid.RowDefinitions.Clear(); $script:pfRowsGrid.ColumnDefinitions.Clear()
+        foreach ($cw in 70, 280, 150, '*') { $cd = New-Object Windows.Controls.ColumnDefinition; $cd.Width = $(if ($cw -eq '*') { New-Object Windows.GridLength(1, 'Star') } else { New-Object Windows.GridLength($cw) }); $script:pfRowsGrid.ColumnDefinitions.Add($cd) }
+        $script:pfRows = @(); $r = 0; $lastGroup = $null
+        foreach ($def in $pg.Settings) {
+            if ($def.Group -ne $lastGroup) {
+                $script:pfRowsGrid.RowDefinitions.Add((New-Object Windows.Controls.RowDefinition))
+                $h = New-Object Windows.Controls.TextBlock; $h.Text = $def.Group.ToUpper(); $h.Foreground = '#5B8CFF'; $h.FontSize = 11; $h.FontWeight = 'SemiBold'; $h.Margin = $(if ($r) { '0,14,0,4' } else { '0,0,0,4' })
+                [Windows.Controls.Grid]::SetRow($h, $r); [Windows.Controls.Grid]::SetColumnSpan($h, 4); [void]$script:pfRowsGrid.Children.Add($h)
+                $r++; $lastGroup = $def.Group
+            }
+            $script:pfRowsGrid.RowDefinitions.Add((New-Object Windows.Controls.RowDefinition))
+            $row = [pscustomobject]@{ Def = $def; Check = $null; Box = $null }
+            $cb = New-Object Windows.Controls.CheckBox; $cb.Content = 'Lock'; $cb.VerticalAlignment = 'Center'; $cb.Tag = $row
+            $lbl = New-Object Windows.Controls.TextBlock; $lbl.Text = $def.Label; $lbl.VerticalAlignment = 'Center'; $lbl.Margin = '0,0,10,0'; $lbl.TextTrimming = 'CharacterEllipsis'
+            $lbl.ToolTip = $(if ($def.Tip) { "$($def.Tip)`n`n$($def.Key)" } else { $def.Key })
+            $tb = New-Object Windows.Controls.TextBox; $tb.Padding = '4,3'; $tb.Margin = '0,4'; $tb.Tag = $row
+            $has = $cur.ContainsKey($def.Key)
+            $locked = $e.values.Contains($def.Key)
+            $tb.Text = $(if ($locked) { [string]$e.values[$def.Key] } elseif ($has) { [string]$cur[$def.Key] } else { '' })
+            $hint = New-Object Windows.Controls.TextBlock; $hint.VerticalAlignment = 'Center'; $hint.Margin = '12,0,0,0'; $hint.TextTrimming = 'CharacterEllipsis'
+            $hint.Text = $(if ($has) { "In the game now: $($cur[$def.Key])" } elseif ($path) { 'Not in the file' } else { '' })
+            $hint.Foreground = $(if ($locked -and $has -and [string]$cur[$def.Key] -ne [string]$e.values[$def.Key]) { '#FB923C' } else { '#7A8397' })
+            if ($def.Recommended) { $hint.ToolTip = "VR starting point: $($def.Recommended)" }
+            $cb.IsChecked = $locked; $tb.IsEnabled = $locked
+            $cb.IsEnabled = [bool]$path -and ($has -or $pg.Format -eq 'scs')
+            $cb.Add_Click({ $this.Tag.Box.IsEnabled = [bool]$this.IsChecked; if (-not $script:pfLoading) { $script:pfDirty = $true } })
+            $tb.Add_TextChanged({ if (-not $script:pfLoading) { $script:pfDirty = $true } })
+            $row.Check = $cb; $row.Box = $tb
+            $col = 0
+            foreach ($el in $cb, $lbl, $tb, $hint) { [Windows.Controls.Grid]::SetRow($el, $r); [Windows.Controls.Grid]::SetColumn($el, $col); [void]$script:pfRowsGrid.Children.Add($el); $col++ }
+            $script:pfRows += $row; $r++
+        }
+        foreach ($b in 'Recommend', 'UseCurrent', 'OpenFile', 'SaveApply') { $script:pw2.FindName($b).IsEnabled = [bool]$path }
+        $script:pfLock.IsEnabled = [bool]$path
+        $script:pfLoading = $false
+    }
+
+    # Copy what's on screen into the in-memory settings (checks the values first)
+    $script:pfStore = {
+        if (-not $script:pfTarget) { return }
+        $e = Get-PerfEntry $script:pfCfg $script:pfTarget
+        $vals = [ordered]@{}
+        foreach ($row in $script:pfRows) {
+            if (-not $row.Check.IsChecked) { continue }
+            $v = $row.Box.Text.Trim()
+            if (-not $v) { throw "$($row.Def.Label): enter a value, or untick Lock." }
+            if ($v.Contains('"') -or $v.Contains("`n")) { throw "$($row.Def.Label): the value can't contain quotes or line breaks." }
+            $vals[$row.Def.Key] = $v
+        }
+        $e.values = $vals; $e.pinCores = [bool]$script:pfPin.IsChecked; $e.keepWindow = [bool]$script:pfKeep.IsChecked; $e.lock = [bool]$script:pfLock.IsChecked
+    }
+    $script:pfSaveAll = {
+        & $script:pfStore
+        Save-PerfConfig $script:pfCfg
+        $script:pfDirty = $false; & $script:pfMarks
+        $e = $script:pfCfg.games[$script:pfTarget]
+        $needGuard = @($script:pfCfg.games.Values | Where-Object { ($_.lock -and $_.values.Count) -or $_.pinCores -or $_.keepWindow }).Count -gt 0
+        if ($needGuard -and -not (Get-GuardTask | Where-Object { $_.State -ne 'Disabled' })) { return 'Saved. Turn on Performance Guard (bottom left) so these are kept and applied while you play.' }
+        return 'Saved. Performance Guard picks the changes up within a few seconds.'
+    }
+
+    $script:pfTargets.Add_SelectionChanged({
+        $it = $script:pfTargets.SelectedItem
+        if (-not $it -or $script:pfSwitching) { return }
+        if ($script:pfTarget -and $script:pfTarget -ne [string]$it.Tag) {
+            try { & $script:pfStore } catch {
+                & $script:pfSay $_.Exception.Message $true
+                $script:pfSwitching = $true; $script:pfTargets.SelectedItem = ($script:pfTargets.Items | Where-Object { $_.Tag -eq $script:pfTarget }); $script:pfSwitching = $false
+                return
+            }
+        }
+        & $script:pfLoad ([string]$it.Tag)
+    })
+    foreach ($c in $script:pfPin, $script:pfKeep, $script:pfLock) { $c.Add_Click({ if (-not $script:pfLoading) { $script:pfDirty = $true } }) }
+
+    $w.FindName('Recommend').Add_Click({
+        $n = 0
+        foreach ($row in $script:pfRows) {
+            if ($null -eq $row.Def.Recommended -or -not $row.Check.IsEnabled) { continue }
+            $row.Check.IsChecked = $true; $row.Box.IsEnabled = $true; $row.Box.Text = [string]$row.Def.Recommended; $n++
+        }
+        $script:pfLock.IsChecked = $true
+        if ($script:pfMask) { $script:pfPin.IsChecked = $true }
+        $script:pfKeep.IsChecked = $true; $script:pfDirty = $true
+        & $script:pfSay "Filled in $n VR starting values (hover a setting to see what it does). Check them, then Save."
+    })
+    $w.FindName('UseCurrent').Add_Click({
+        $n = 0
+        foreach ($row in $script:pfRows) { if ($row.Check.IsChecked -and $script:pfCur.ContainsKey($row.Def.Key)) { $row.Box.Text = [string]$script:pfCur[$row.Def.Key]; $n++ } }
+        $script:pfDirty = $true
+        & $script:pfSay $(if ($n) { "$n ticked setting(s) now match the game's file." } else { 'Tick Lock on the settings you want first.' })
+    })
+    $w.FindName('OpenFile').Add_Click({ if ($script:pfPath) { Start-Process explorer.exe -ArgumentList "/select,`"$($script:pfPath)`"" } })
+    $w.FindName('OpenLog').Add_Click({ if (-not (Test-Path $PerfLog)) { Write-PerfLog 'Log created' }; Start-Process notepad.exe $PerfLog })
+    $w.FindName('Save').Add_Click({ try { & $script:pfSay (& $script:pfSaveAll) } catch { & $script:pfSay $_.Exception.Message $true } })
+    $w.FindName('SaveApply').Add_Click({
+        try {
+            $msg = & $script:pfSaveAll
+            $pg = Get-PerfGame $script:pfTarget; $e = $script:pfCfg.games[$pg.Id]
+            if (-not $e.values.Count) { & $script:pfSay 'Saved. No settings are ticked, so there was nothing to apply.'; return }
+            if ((Get-PerfProcesses $pg).Count) { & $script:pfSay "Saved. $($pg.Name) is running - close it first (it rewrites its file when it quits). Performance Guard applies them once it's closed." $true; return }
+            $ch = @(Set-PerfValues $pg $script:pfPath $e.values)
+            if ($ch.Count) { Write-PerfLog "$($pg.Name): applied $($ch.Count) setting(s) from the app: $($ch -join '; ')" }
+            & $script:pfLoad $pg.Id
+            & $script:pfSay $(if ($ch.Count) { "Saved and applied $($ch.Count) setting(s) to $($pg.Name). A backup of the old file is in backups\performance." } else { "Saved. $($pg.Name) already had these values." })
+        } catch { & $script:pfSay $_.Exception.Message $true }
+    })
+    $script:pfGuardOn.Add_Click({
+        if ($script:pfGuardLoading) { return }
+        try {
+            if ($script:pfGuardOn.IsChecked) {
+                [void](Register-GuardTask $true); Start-Guard
+                $script:pfCfg.guard = $true; Write-PerfLog 'Performance Guard turned on in the app'
+                & $script:pfSay 'Performance Guard is on. It starts with Windows and shows an icon in the tray by the clock.'
+            } else {
+                if (Get-GuardTask) { [void](Disable-ScheduledTask -TaskName $GuardTask) }
+                Stop-Guard
+                $script:pfCfg.guard = $false; Write-PerfLog 'Performance Guard turned off in the app'
+                & $script:pfSay 'Performance Guard is off. Locked settings are no longer put back.'
+            }
+            # Save only the on/off switch; other edits stay unsaved until Save
+            $disk = Read-PerfConfig; $disk.guard = $script:pfCfg.guard; Save-PerfConfig $disk
+        } catch { & $script:pfSay "Couldn't change Performance Guard: $($_.Exception.Message)" $true }
+        Start-Sleep -Milliseconds 700; & $script:pfGuardShow
+    })
+    $w.Add_Closing({
+        param($s, $ev)
+        if (-not $script:pfDirty -or $Test) { return }
+        $a = [Windows.MessageBox]::Show('Save your Performance changes before closing?', 'Performance', 'YesNoCancel', 'Question')
+        if ($a -eq 'Cancel') { $ev.Cancel = $true; return }
+        if ($a -eq 'Yes') { try { [void](& $script:pfSaveAll) } catch { [Windows.MessageBox]::Show($_.Exception.Message, 'Performance', 'OK', 'Warning') | Out-Null; $ev.Cancel = $true } }
+    })
+
+    & $script:pfMarks; & $script:pfGuardShow
+    $start = $script:pfTargets.Items | Where-Object { $_.Tag -eq $startId } | Select-Object -First 1
+    if (-not $start) { $start = $script:pfTargets.Items | Where-Object { Get-PerfConfigPath (Get-PerfGame ([string]$_.Tag)) } | Select-Object -First 1 }
+    if (-not $start) { $start = $script:pfTargets.Items[0] }
+    $script:pfTargets.SelectedItem = $start
+    if ($script:Capture -or $Test) { return $script:pw2 }
+    [void]$script:pw2.ShowDialog()
+}
+
+# Which Performance game (if any) a Pimax library entry is, by its .exe or Steam app id
+function Get-PerfIdForGame($game) {
+    if (-not $game) { return $null }
+    $route = (Get-Route $game)
+    $steam = @{ '270880' = 'ats'; '227300' = 'ets2'; '2537590' = 'msfs2024'; '1250410' = 'msfs2020'; '223750' = 'dcs'; '244210' = 'ac'; '1066890' = 'ams2'; '211500' = 'r3e' }
+    foreach ($pg in $PerfGames) { if ($route -and $route -match $pg.RouteMatch) { return $pg.Id } }
+    $id = Get-GameId $game
+    if ($id -match '^steam\.app\.(\d+)$' -and $steam.ContainsKey($Matches[1])) { return $steam[$Matches[1]] }
+    return $null
+}
+
+$ui.PerfBtn.Add_Click({
+    try { Show-Performance (Get-PerfIdForGame (Selected-Game)) } catch { Set-Status "Performance failed: $($_.Exception.Message)" $true }
+})
+# Keep the guard's scheduled task pointing at this copy of the app, and start it if it should be running
+$window.Add_Loaded({ if ($Test) { return }; try { Update-GuardTask; $t = Get-GuardTask; if ($t -and $t.State -ne 'Disabled' -and -not (Test-GuardRunning)) { Start-Guard } } catch { } })
+
 # ---------- Add games window ----------
 function Show-AddGames {
     $script:aw = New-DarkWindow 'Add games' 1000 680 @'
@@ -2584,6 +3474,8 @@ $TutorialSteps = @(
        Body = "Library order lets you tick games to pin them and drag them into any order. Pinned games always show first in Pimax Play.`n`nTip: click Pin all, then drag, to control the whole list." },
     @{ Icon = 'IcoSliders'; Title = 'Game settings'
        Body = "Edit Pimax's per-game graphics settings in one place. Tick Custom to give a game its own value; everything else follows Global.`n`nApply to... copies one setting to other games, Copy all settings to... gives them the same full setup, and nothing is written until you click Save all changes." },
+    @{ Icon = 'IcoGauge'; Title = 'Performance'; Since = '1.9.0'
+       Body = "Some games keep their graphics in their own file and reset it after an update. Performance... locks the settings you want in truck, racing and flight sims (ATS, ETS2, MSFS, DCS, Falcon BMS, iRacing, Assetto Corsa, AMS2, RaceRoom), with a VR starting point to begin from.`n`nIt can also run a game on your CPU's performance cores and pull its desktop window back on screen. The Performance Guard does this in the background from a tray icon." },
     @{ Icon = 'IcoArchive'; Title = 'Backups'
        Body = "A backup is saved automatically whenever you change something here. If a Pimax update resets your images, order, settings or headset setup, an orange bar offers to put them back.`n`nYou can also restore any backup yourself from Backup & restore." },
     @{ Icon = 'IcoPower'; Title = 'Applying changes'
@@ -2793,6 +3685,7 @@ function Start-SelfUpdate {
             $helper = Join-Path (Split-Path $script:UpdDownload) 'apply-update.ps1'
             $text = New-UpdaterScript $script:UpdKind.Kind $script:UpdDownload $script:UpdKind.Exe $PID $log $true
             [IO.File]::WriteAllText($helper, $text, (New-Object Text.UTF8Encoding($true)))
+            try { Stop-Guard } catch { }    # the guard runs from the same exe; it is started again when the app reopens
             Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$helper`""
             Set-AppSetting 'updatedFrom' $AppVersion
             $ui.UpdateText.Text = "Installing version $v - the app will reopen in a moment..."
@@ -2926,6 +3819,7 @@ if ($Test) {
         [void](Show-Order); Save-Shot $script:ow 'order'; $script:ow.Close()
         $sid = if ($pick) { Get-GameId $pick.Tag } else { 'global' }
         $sw = Show-GameSettings $sid; Save-Shot $sw 'settings'; $sw.Close()
+        $pfw = Show-Performance 'ats'; Save-Shot $pfw 'performance'; $pfw.Close()
         $bw = Show-Backups $null $null; Save-Shot $bw 'backups'; $bw.Close()
         if ($pick) { $script:FinderTerm = 'Crysis'; $fw = Show-Finder $pick.Tag; Save-Shot $fw 'finder'; $fw.Close() }
         $aw = Show-AddGames
@@ -2965,6 +3859,17 @@ if ($Test) {
         "  simulated v1.0.0 -> notice: " + [bool](Get-UpdateInfo ([pscustomobject]@{ tag_name = 'v1.0.0' }))
     } catch { "  check failed: $($_.Exception.Message)" }
     "--- Report link: '$($ui.ReportLink.Text)' -> $(Get-ReportUrl)"
+    "--- Performance (nothing is written):"
+    "  P-cores: $(Get-PCoreText (Get-PCoreMask))   guard task: $(if (Get-GuardTask) { (Get-GuardTask).State } else { 'none' })   guard running: $(Test-GuardRunning)"
+    foreach ($pg in $PerfGames) { "  {0,-36} {1}" -f $pg.Name, $(if (Get-PerfConfigPath $pg) { (Get-PerfConfigPath $pg) } else { '(not found)' }) }
+    foreach ($it in $ui.GameList.Items) { $pid2 = Get-PerfIdForGame $it.Tag; if ($pid2) { "  library entry '$($it.Tag.Name)' -> $pid2" } }
+    $pfw = Show-Performance 'ats'
+    "  window: '$($script:pfTitle.Text)', $($script:pfRows.Count) settings, locked: $(@($script:pfRows | Where-Object { $_.Check.IsChecked }).Count), guard box: $($script:pfGuardOn.IsChecked)"
+    $script:pfTargets.SelectedItem = ($script:pfTargets.Items | Where-Object { $_.Tag -eq 'msfs2024' })
+    "  switched to: '$($script:pfTitle.Text)', $($script:pfRows.Count) settings"
+    $pfw.FindName('Recommend').RaiseEvent((New-Object Windows.RoutedEventArgs([Windows.Controls.Primitives.ButtonBase]::ClickEvent)))
+    "  Recommended for VR: $($script:pfStatus.Text)"
+    $pfw.Close()
     "--- Game settings (on a temporary copy of AppConfig; Pimax is not touched):"
     $realCfg = $AppConfigDir
     $AppConfigDir = Join-Path $env:TEMP ('pgm-test-' + [guid]::NewGuid().ToString('N'))
