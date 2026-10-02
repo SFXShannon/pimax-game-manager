@@ -37,7 +37,7 @@ try {
     if ((Test-Path $legacyCfg) -and -not (Test-Path $newCfg)) { Copy-Item $legacyCfg $newCfg }
 } catch { }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
-$AppVersion = '1.9.0'
+$AppVersion = '1.9.1'
 $RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-game-manager/releases/latest'
 
 # ---------- Performance: lock game settings, performance cores, window fix, background guard ----------
@@ -403,11 +403,21 @@ function Set-PerfValues($pg, [string]$path, $want, [switch]$WhatIf) {
     if ($changes.Count -and -not $WhatIf) {
         $dir = Join-Path $PerfBackupDir $pg.Id
         if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force $dir | Out-Null }
+        if (-not (Get-PerfOriginal $pg)) { Copy-Item -LiteralPath $path (Join-Path $dir ('original-' + [IO.Path]::GetFileName($path))) }
         Copy-Item -LiteralPath $path (Join-Path $dir ("{0:yyyyMMdd-HHmmss}-{1}" -f (Get-Date), [IO.Path]::GetFileName($path)))
-        Get-ChildItem $dir -File | Sort-Object LastWriteTime -Descending | Select-Object -Skip 20 | Remove-Item -ErrorAction SilentlyContinue
+        Get-ChildItem $dir -File | Where-Object { $_.Name -notlike 'original-*' } | Sort-Object LastWriteTime -Descending | Select-Object -Skip 20 | Remove-Item -ErrorAction SilentlyContinue
         Write-TextKeep $path $doc $text
     }
     return $changes.ToArray()      # callers wrap it in @() to count
+}
+
+# The game's file as it was before this app first changed it ("original-..."; for older backups, the oldest copy)
+function Get-PerfOriginal($pg) {
+    $dir = Join-Path $PerfBackupDir $pg.Id
+    if (-not (Test-Path $dir)) { return $null }
+    $o = Get-ChildItem $dir -File -Filter 'original-*' | Select-Object -First 1
+    if (-not $o) { $o = Get-ChildItem $dir -File | Sort-Object Name | Select-Object -First 1 }   # names start with the date and time of the backup
+    return $o
 }
 
 try {
@@ -2867,13 +2877,15 @@ function Show-Performance([string]$startId) {
       </Border>
       <DockPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
         <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoSave}" x:Name="Save" DockPanel.Dock="Right" Content="Save" Background="#16A34A" BorderBrush="#22C55E" FontWeight="SemiBold"/>
-        <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoCheck}" x:Name="SaveApply" DockPanel.Dock="Right" Content="Save &amp; apply to the game now" Margin="0,0,8,0"
+        <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoCheck}" x:Name="SaveApply" DockPanel.Dock="Right" Content="Save &amp; apply now" Margin="0,0,8,0"
                 ToolTip="Save, and write the locked settings into the game's file right away (the game must be closed)"/>
         <StackPanel Orientation="Horizontal">
           <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoGauge}" x:Name="Recommend" Content="Recommended for VR" Background="#2F6BFF" BorderBrush="#5B8CFF"
                   ToolTip="Tick and fill in a VR starting point. Settings without a suggestion are left as they are."/>
-          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoDownload}" x:Name="UseCurrent" Content="Use current values" Margin="8,0,0,0"
+          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoDownload}" x:Name="UseCurrent" Content="Use current" Margin="8,0,0,0"
                   ToolTip="Fill the ticked settings with what the game's file has now"/>
+          <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoUndo}" x:Name="Restore" Content="Restore original..." Margin="8,0,0,0"
+                  ToolTip="Put the game's settings file back the way it was before this app first changed it, and stop locking it - handy to compare before and after"/>
           <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoFolder}" x:Name="OpenFile" Content="Show file" Margin="8,0,0,0"
                   ToolTip="Open the folder with the game's settings file"/>
         </StackPanel>
@@ -2894,7 +2906,7 @@ function Show-Performance([string]$startId) {
     $script:pfDirty = $false; $script:pfTarget = $null; $script:pfRows = @()
     $script:pfMask = Get-PCoreMask
 
-    foreach ($pg in $PerfGames) {
+    foreach ($pg in ($PerfGames | Sort-Object @{ Expression = { if (Get-PerfConfigPath $_) { 0 } else { 1 } } }, @{ Expression = { [array]::IndexOf($PerfGames, $_) } })) {
         $it = New-Object Windows.Controls.ListBoxItem; $it.Tag = $pg.Id; $it.Padding = '6,6'
         [void]$script:pfTargets.Items.Add($it)
     }
@@ -2903,7 +2915,7 @@ function Show-Performance([string]$startId) {
             $pg = Get-PerfGame ([string]$it.Tag); $path = Get-PerfConfigPath $pg
             $e = if ($script:pfCfg.games.Contains($pg.Id)) { $script:pfCfg.games[$pg.Id] } else { $null }
             $on = $e -and ($e.lock -or $e.pinCores -or $e.keepWindow)
-            $it.Content = $pg.Name + $(if ($on) { '   *' } else { '' }) + $(if (-not $path) { '   (not found)' } else { '' })
+            $it.Content = $pg.Name + $(if ($on) { '   *' } else { '' }) + $(if (-not $path) { '   (not installed)' } else { '' })
             $it.Foreground = $(if (-not $path) { '#6B7385' } else { '#E8EBF2' })
             $it.ToolTip = $(if (-not $path) { 'Its settings file was not found on this PC' } elseif ($on) { 'Performance options are on' } else { '' })
         }
@@ -2928,7 +2940,7 @@ function Show-Performance([string]$startId) {
         $running = (Get-PerfProcesses $pg).Count -gt 0
         $script:pfTitle.Text = $pg.Name
         $script:pfInfo.Text = $(if ($path) { "Settings file: $path" + $(if ($running) { "`nThe game is running now - changes to its file are made after it closes." } else { '' }) }
-                                else { "Its settings file wasn't found. Looked in:`n" + (($pg.Configs | ForEach-Object { if ($_ -is [scriptblock]) { 'the game''s install folder' } else { $_ } }) -join "`n") + "`nStart the game once so it creates the file." }) 
+                                else { "Not installed on this PC, so there's nothing to set up here. (No settings file in:`n" + (($pg.Configs | ForEach-Object { if ($_ -is [scriptblock]) { 'the game''s install folder' } else { $_ } }) -join "`n") + ")`nIf it is installed, start it once so it creates the file." }) 
         $script:pfLoading = $true
         $script:pfPin.IsChecked = [bool]$e.pinCores; $script:pfKeep.IsChecked = [bool]$e.keepWindow; $script:pfLock.IsChecked = [bool]$e.lock
         $script:pfPin.IsEnabled = [bool]$script:pfMask
@@ -2967,6 +2979,9 @@ function Show-Performance([string]$startId) {
             $script:pfRows += $row; $r++
         }
         foreach ($b in 'Recommend', 'UseCurrent', 'OpenFile', 'SaveApply') { $script:pw2.FindName($b).IsEnabled = [bool]$path }
+        $orig = Get-PerfOriginal $pg
+        $rb = $script:pw2.FindName('Restore'); $rb.IsEnabled = [bool]($path -and $orig)
+        $rb.ToolTip = $(if ($orig) { "Put the file back as it was on $($orig.LastWriteTime.ToString('g')), before this app first changed it, and stop locking it - handy to compare before and after" } else { 'Nothing to restore: this app hasn''t changed this game''s file yet' })
         $script:pfLock.IsEnabled = [bool]$path
         $script:pfLoading = $false
     }
@@ -3025,6 +3040,23 @@ function Show-Performance([string]$startId) {
         foreach ($row in $script:pfRows) { if ($row.Check.IsChecked -and $script:pfCur.ContainsKey($row.Def.Key)) { $row.Box.Text = [string]$script:pfCur[$row.Def.Key]; $n++ } }
         $script:pfDirty = $true
         & $script:pfSay $(if ($n) { "$n ticked setting(s) now match the game's file." } else { 'Tick Lock on the settings you want first.' })
+    })
+    $w.FindName('Restore').Add_Click({
+        $pg = Get-PerfGame $script:pfTarget; $orig = Get-PerfOriginal $pg
+        if (-not $orig -or -not $script:pfPath) { return }
+        if ((Get-PerfProcesses $pg).Count) { & $script:pfSay "Close $($pg.Name) first - it rewrites its settings file when it quits." $true; return }
+        $a = [Windows.MessageBox]::Show("Put $($pg.Name)'s settings file back the way it was on $($orig.LastWriteTime.ToString('g')), before Pimax Game Manager first changed it?`n`nLocking is turned off for this game so the guard leaves it alone. Your locked values are kept: to go back to them, tick 'Lock the settings ticked below' and click Save & apply now.", 'Restore original', 'OKCancel', 'Question')
+        if ($a -ne 'OK') { return }
+        try {
+            $dir = Join-Path $PerfBackupDir $pg.Id
+            Copy-Item -LiteralPath $script:pfPath (Join-Path $dir ("{0:yyyyMMdd-HHmmss}-{1}" -f (Get-Date), [IO.Path]::GetFileName($script:pfPath)))
+            Copy-Item -LiteralPath $orig.FullName $script:pfPath -Force
+            $disk = Read-PerfConfig; $e = Get-PerfEntry $disk $pg.Id; $e.lock = $false; Save-PerfConfig $disk
+            $mem = Get-PerfEntry $script:pfCfg $pg.Id; $mem.lock = $false
+            Write-PerfLog "$($pg.Name): original settings file restored from the app; locking turned off"
+            & $script:pfLoad $pg.Id; & $script:pfMarks
+            & $script:pfSay "$($pg.Name) is back to its original settings and no longer locked. To switch back, tick Lock the settings ticked below and click Save & apply now."
+        } catch { & $script:pfSay "Couldn't restore: $($_.Exception.Message)" $true }
     })
     $w.FindName('OpenFile').Add_Click({ if ($script:pfPath) { Start-Process explorer.exe -ArgumentList "/select,`"$($script:pfPath)`"" } })
     $w.FindName('OpenLog').Add_Click({ if (-not (Test-Path $PerfLog)) { Write-PerfLog 'Log created' }; Start-Process notepad.exe $PerfLog })
