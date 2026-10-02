@@ -37,7 +37,7 @@ try {
     if ((Test-Path $legacyCfg) -and -not (Test-Path $newCfg)) { Copy-Item $legacyCfg $newCfg }
 } catch { }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
-$AppVersion = '1.9.2'
+$AppVersion = '1.9.3'
 $RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-game-manager/releases/latest'
 
 # ---------- Performance: lock game settings, performance cores, window fix, background guard ----------
@@ -3056,7 +3056,7 @@ function Show-Performance([string]$startId) {
         $pg = Get-PerfGame $script:pfTarget; $orig = Get-PerfOriginal $pg
         if (-not $orig -or -not $script:pfPath) { return }
         if ((Get-PerfProcesses $pg).Count) { & $script:pfSay "Close $($pg.Name) first - it rewrites its settings file when it quits." $true; return }
-        $a = [Windows.MessageBox]::Show("Put $($pg.Name)'s settings file back the way it was on $($orig.LastWriteTime.ToString('g')), before Pimax Game Manager first changed it?`n`nLocking is turned off for this game so the guard leaves it alone. Your locked values are kept: to go back to them, tick 'Lock the settings ticked below' and click Save & apply now.", 'Restore original', 'OKCancel', 'Question')
+        $a = [Windows.MessageBox]::Show("Put $($pg.Name)'s settings file back the way it was on $($orig.LastWriteTime.ToString('g')), before Pimax Game Manager first changed it?`n`nLocking is turned off for this game so the guard leaves it alone. Your locked values are kept: to go back to them, click Save & apply now.", 'Restore original', 'OKCancel', 'Question')
         if ($a -ne 'OK') { return }
         try {
             $dir = Join-Path $PerfBackupDir $pg.Id
@@ -3066,7 +3066,7 @@ function Show-Performance([string]$startId) {
             $mem = Get-PerfEntry $script:pfCfg $pg.Id; $mem.lock = $false
             Write-PerfLog "$($pg.Name): original settings file restored from the app; locking turned off"
             & $script:pfLoad $pg.Id; & $script:pfMarks
-            & $script:pfSay "$($pg.Name) is back to its original settings and no longer locked. To switch back, tick Lock the settings ticked below and click Save & apply now."
+            & $script:pfSay "$($pg.Name) is back to its original settings and no longer locked. To switch back, click Save & apply now."
         } catch { & $script:pfSay "Couldn't restore: $($_.Exception.Message)" $true }
     })
     $w.FindName('OpenFile').Add_Click({ if ($script:pfPath) { Start-Process explorer.exe -ArgumentList "/select,`"$($script:pfPath)`"" } })
@@ -3074,6 +3074,9 @@ function Show-Performance([string]$startId) {
     $w.FindName('Save').Add_Click({ try { & $script:pfSay (& $script:pfSaveAll) } catch { & $script:pfSay $_.Exception.Message $true } })
     $w.FindName('SaveApply').Add_Click({
         try {
+            # Applying ticked settings means you want them kept, so locking is switched on with them
+            $lockedNow = $false
+            if (-not $script:pfLock.IsChecked -and @($script:pfRows | Where-Object { $_.Check.IsChecked }).Count) { $script:pfLock.IsChecked = $true; $lockedNow = $true }
             $msg = & $script:pfSaveAll
             $pg = Get-PerfGame $script:pfTarget; $e = $script:pfCfg.games[$pg.Id]
             if (-not $e.values.Count) { & $script:pfSay 'Saved. No settings are ticked, so there was nothing to apply.'; return }
@@ -3081,7 +3084,7 @@ function Show-Performance([string]$startId) {
             $ch = @(Set-PerfValues $pg $script:pfPath $e.values)
             if ($ch.Count) { Write-PerfLog "$($pg.Name): applied $($ch.Count) setting(s) from the app: $($ch -join '; ')" }
             & $script:pfLoad $pg.Id
-            & $script:pfSay $(if ($ch.Count) { "Saved and applied $($ch.Count) setting(s) to $($pg.Name). A backup of the old file is in backups\performance." } else { "Saved. $($pg.Name) already had these values." })
+            & $script:pfSay (($(if ($ch.Count) { "Saved and applied $($ch.Count) setting(s) to $($pg.Name). A backup of the old file is in backups\performance." } else { "Saved. $($pg.Name) already had these values." })) + $(if ($lockedNow) { ' Locking is on again, so Performance Guard keeps them.' } else { '' }))
         } catch { & $script:pfSay $_.Exception.Message $true }
     })
     $script:pfGuardOn.Add_Click({
