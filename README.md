@@ -137,7 +137,7 @@ Some games keep their own graphics settings in their own file, separate from Pim
 
 ![Performance](screenshots/performance-v1.9.0.png)
 
-Supported games and the file each one keeps its settings in:
+Supported games (49) and the file each one keeps its settings in:
 
 | Game | Settings file |
 |---|---|
@@ -153,10 +153,32 @@ Supported games and the file each one keeps its settings in:
 | Assetto Corsa Rally | `%LOCALAPPDATA%\acr\Saved\Config\Windows\GameUserSettings.ini` |
 | Crysis VR | `Documents\My Games\Crysis\game.cfg` |
 | Skyrim VR | the selected Mod Organizer 2 profile's `skyrimprefs.ini` (Wabbajack lists), otherwise `Documents\My Games\Skyrim VR\SkyrimPrefs.ini` |
+| Blade & Sorcery (Steam and Meta) | `Documents\My Games\BladeAndSorcery\Saves\Default\Options.opt` |
+| BeamNG.drive | `settings.json` in the newest version folder under `%LOCALAPPDATA%\BeamNG.drive` (or `BeamNG\BeamNG.drive\current`) |
+| Unreal Engine games: Pavlov, Contractors, Contractors Showdown, KartKraft, MechWarrior 5: Mercenaries and Clans | `GameUserSettings.ini` under `%LOCALAPPDATA%\<game>\Saved\Config` (the newest one is used) |
+
+**From published guides, not yet checked against a real install** (marked in the app; a setting your version doesn't use shows *Not in the file*):
+
+| Game | Settings file |
+|---|---|
+| Fallout 4 VR | `Documents\My Games\Fallout4VR\Fallout4Prefs.ini` |
+| No Man's Sky | `Binaries\SETTINGS\TKGRAPHICSSETTINGS.VR.MXML` in the game folder (the VR copy) |
+| Elite Dangerous | `%LOCALAPPDATA%\Frontier Developments\Elite Dangerous\Options\Graphics\Custom.4.0.fxcfg` (used when the preset is Custom) |
+| Star Wars: Squadrons | `Documents\STAR WARS Squadrons (Steam)\settings\ProfileOptions_profile` (the `_VR` settings) |
+| Star Citizen | `StarCitizen\LIVE\USER.cfg` (made empty if missing; the game reads it at every start) |
+| War Thunder | `config.blk` in the game folder |
+| IL-2 Sturmovik: Great Battles | `data\startup.cfg` in the game folder |
+| rFactor 2, Le Mans Ultimate | `UserData\player\player.JSON` / `Settings.JSON` in the game folder (`Graphic Options`) |
+| F1 24, F1 25, DiRT Rally 2.0 | `Documents\My Games\<game>\hardwaresettings\hardware_settings_config_vr.xml` (the VR file) |
+| EA Sports WRC | `%LOCALAPPDATA%\WRC\Saved\Config\WindowsNoEditor\GameUserSettings.ini` (the game's own `VR...` settings) |
+| Into the Radius 2 | `Documents\My Games\IntoTheRadius2\settings.ini` |
+| Unreal Engine games: The Walking Dead: Saints & Sinners, Medal of Honor: Above and Beyond, Project Wingman, Metro Awakening, Skydance's Behemoth, Alien: Rogue Incursion, Moss, Moss: Book II, Hellblade VR, Robo Recall, Zero Caliber VR, FNAF: Help Wanted, Riven | `GameUserSettings.ini` under `%LOCALAPPDATA%\<game>\Saved\Config` |
+
+For Unreal Engine games the app uses the engine's own quality groups (`sg.ShadowQuality` and the rest, 0 = low to 3 = epic), which every Unreal game reads. Games only write the ones you've changed in their menu, so a locked setting that's missing is added to the file. On Unreal Engine 5 games, global illumination and reflections are suggested at 1, which keeps Lumen (the engine's heaviest lighting) off.
 
 Games that aren't installed show as *not installed*. Half-Life: Alyx isn't included: it sets its own detail level as you play and keeps almost nothing in its settings file.
 
-**Add your own game...** (under the game list) works with any other game that keeps its graphics settings in a text file, such as Le Mans Ultimate, IL-2 or X-Plane 12: pick the game's .exe and the file (.ini, .cfg, .json, .xml, .lua, .prf...). The app works out the file's layout, lists every setting in it, and you lock the ones you want; **Find a setting** narrows the list. Locking, the performance cores and the window fix work the same as for the built-in games.
+**Add your own game...** (under the game list) works with any other game that keeps its graphics settings in a text file, such as X-Plane 12 or Aerofly FS 4: pick the game's .exe and the file (.ini, .cfg, .json, .xml, .lua, .prf...). The app works out the file's layout, lists every setting in it, and you lock the ones you want; **Find a setting** narrows the list. Locking, the performance cores and the window fix work the same as for the built-in games.
 
 For each game:
 
@@ -259,13 +281,13 @@ Add `-Guard` to run only the Performance Guard.
 
 ```powershell
 Install-Module ps2exe -Scope CurrentUser
-Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.11.2
+Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.12.0
 ```
 
 To build the installer too, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
-& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.11.2 .\PimaxGameManager.iss
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.12.0 .\PimaxGameManager.iss
 ```
 
 The app icon and `assets/logo.png` are generated from the logo shapes used in the app:

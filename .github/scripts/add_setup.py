@@ -7,6 +7,17 @@ GAMES = {
     "msfs2020": "Microsoft Flight Simulator 2020", "dcs": "DCS World", "bms": "Falcon BMS", "iracing": "iRacing (VR)",
     "ac": "Assetto Corsa", "ams2": "Automobilista 2", "r3e": "RaceRoom Racing Experience", "acc": "Assetto Corsa Competizione",
     "acr": "Assetto Corsa Rally", "crysisvr": "Crysis VR", "skyrimvr": "Skyrim VR",
+    "bns": "Blade & Sorcery", "beamng": "BeamNG.drive", "pavlov": "Pavlov", "contractors": "Contractors",
+    "contractorsshowdown": "Contractors Showdown", "kartkraft": "KartKraft", "mw5mercs": "MechWarrior 5: Mercenaries",
+    "mw5clans": "MechWarrior 5: Clans", "fo4vr": "Fallout 4 VR", "nms": "No Man's Sky", "elite": "Elite Dangerous",
+    "squadrons": "Star Wars: Squadrons", "starcitizen": "Star Citizen", "warthunder": "War Thunder",
+    "il2": "IL-2 Sturmovik: Great Battles", "rf2": "rFactor 2", "lmu": "Le Mans Ultimate", "f124": "F1 24",
+    "f125": "F1 25", "dr2": "DiRT Rally 2.0", "eawrc": "EA Sports WRC", "itr2": "Into the Radius 2",
+    "twd": "The Walking Dead: Saints & Sinners", "mohab": "Medal of Honor: Above and Beyond",
+    "projectwingman": "Project Wingman", "metroawakening": "Metro Awakening", "behemoth": "Skydance's Behemoth",
+    "alienri": "Alien: Rogue Incursion", "moss": "Moss", "moss2": "Moss: Book II",
+    "hellbladevr": "Hellblade: Senua's Sacrifice VR", "robo": "Robo Recall", "zerocaliber": "Zero Caliber VR",
+    "fnafhw": "Five Nights at Freddy's: Help Wanted", "riven": "Riven",
 }
 PATH = "community/setups.json"
 
@@ -50,7 +61,7 @@ if not isinstance(values, dict) or not values or len(values) > 60:
 clean_values = {}
 for k, v in values.items():
     v = str(v).strip()
-    if not re.fullmatch(r"[A-Za-z0-9_ ./]{1,80}", str(k)):
+    if not re.fullmatch(r"[A-Za-z0-9_ ./=-]{1,80}", str(k)):
         fail(f"the setting name `{str(k)[:40]}` has unexpected characters.")
     if not re.fullmatch(r"[A-Za-z0-9_. -]{1,40}", v):
         fail(f"the value for `{k}` has unexpected characters.")

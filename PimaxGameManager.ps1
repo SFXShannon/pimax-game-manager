@@ -37,7 +37,7 @@ try {
     if ((Test-Path $legacyCfg) -and -not (Test-Path $newCfg)) { Copy-Item $legacyCfg $newCfg }
 } catch { }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
-$AppVersion = '1.11.2'
+$AppVersion = '1.12.0'
 $RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-game-manager/releases/latest'
 
 # ---------- Performance: lock game settings, performance cores, window fix, background guard ----------
@@ -310,6 +310,313 @@ function Get-SkyrimVrPrefs {
     if (Test-Path -LiteralPath $d) { return $d }
 }
 
+# Install folder of a Steam game, from Steam's library list (cached)
+$script:SteamDirCache = @{}
+function Get-SteamAppDir([string]$appId) {
+    if ($script:SteamDirCache.ContainsKey($appId)) { return $script:SteamDirCache[$appId] }
+    $dir = $null
+    try {
+        $sp = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction Stop).SteamPath
+        $libs = @($sp) + @([regex]::Matches([IO.File]::ReadAllText((Join-Path $sp 'steamapps\libraryfolders.vdf')), '"path"\s+"([^"]+)"') | ForEach-Object { $_.Groups[1].Value -replace '\\\\', '\' })
+        foreach ($l in ($libs | Select-Object -Unique)) {
+            $acf = Join-Path $l "steamapps\appmanifest_$appId.acf"
+            if ((Test-Path -LiteralPath $acf) -and [IO.File]::ReadAllText($acf) -match '"installdir"\s+"([^"]+)"') {
+                $d = Join-Path $l ("steamapps\common\" + $Matches[1]); if (Test-Path -LiteralPath $d) { $dir = $d; break }
+            }
+        }
+    } catch { }
+    $script:SteamDirCache[$appId] = $dir
+    return $dir
+}
+function Join-SteamApp([string]$appId, [string]$rel) { $d = Get-SteamAppDir $appId; if ($d) { Join-Path $d $rel } }
+
+# ---- Unreal Engine games: GameUserSettings.ini, [ScalabilityGroups] sg.* (0 = low ... 3 = epic) ----
+# The same engine settings work in every Unreal game; missing lines are added to the section (the game reads them like its own).
+function New-UeSettings([switch]$Ue5) {
+    $s = @(
+        New-PerfSetting 'ScalabilityGroups/sg.ResolutionQuality' 'Resolution scale (%)' 'Resolution & timing' $null 'Renders below 100% and scales up. In VR, set the resolution in Pimax and keep this at 100.'
+        New-PerfSetting 'ScalabilityGroups/sg.ShadowQuality' 'Shadows (0-3)' 'Graphics (GPU)' @('1', '2', '2', '3') 'One of the biggest costs in Unreal Engine.'
+        New-PerfSetting 'ScalabilityGroups/sg.PostProcessQuality' 'Post processing (0-3)' 'Graphics (GPU)' @('0', '1', '1', '2') 'Includes motion blur, depth of field and ambient occlusion.'
+        New-PerfSetting 'ScalabilityGroups/sg.EffectsQuality' 'Effects (0-3)' 'Graphics (GPU)' @('1', '2', '2', '3') ''
+        New-PerfSetting 'ScalabilityGroups/sg.ShadingQuality' 'Shading (0-3)' 'Graphics (GPU)' @('1', '2', '3', '3') ''
+        New-PerfSetting 'ScalabilityGroups/sg.AntiAliasingQuality' 'Anti-aliasing (0-3)' 'Graphics (GPU)' @('2', '2', '3', '3') 'Low anti-aliasing shimmers a lot in VR.'
+        New-PerfSetting 'ScalabilityGroups/sg.TextureQuality' 'Textures (0-3)' 'Graphics (GPU)' $null 'Uses video memory more than speed.'
+    )
+    if ($Ue5) {
+        $s += New-PerfSetting 'ScalabilityGroups/sg.GlobalIlluminationQuality' 'Global illumination (0-3)' 'Graphics (GPU)' @('0', '1', '1', '1') '2 and 3 turn on Lumen, the heaviest setting in Unreal Engine 5. 1 keeps it off; if the game looks too dark, try 2.'
+        $s += New-PerfSetting 'ScalabilityGroups/sg.ReflectionQuality' 'Reflections (0-3)' 'Graphics (GPU)' @('0', '1', '1', '1') '2 and 3 use Lumen reflections.'
+    }
+    $s += New-PerfSetting 'ScalabilityGroups/sg.ViewDistanceQuality' 'View distance (0-3)' 'World detail (CPU)' @('1', '2', '3', '3') ''
+    $s += New-PerfSetting 'ScalabilityGroups/sg.FoliageQuality' 'Foliage (0-3)' 'World detail (CPU)' @('1', '2', '2', '3') ''
+    if ($Ue5) { $s += New-PerfSetting 'ScalabilityGroups/sg.LandscapeQuality' 'Landscape (0-3)' 'World detail (CPU)' @('1', '2', '2', '3') 'Newer Unreal Engine 5 games only.' }
+    return $s
+}
+$Ue4Settings = New-UeSettings
+$Ue5Settings = New-UeSettings -Ue5
+# The newest GameUserSettings.ini under %LOCALAPPDATA%\<project>\Saved\Config (Windows = UE5, WindowsNoEditor = UE4, WinGDK = Game Pass)
+function Get-UeConfig([string]$folder, [string]$saved) {
+    if (-not $saved) { $saved = 'Saved\Config' }
+    $base = Join-Path $env:LOCALAPPDATA "$folder\$saved"
+    if (-not (Test-Path -LiteralPath $base)) { return $null }
+    @('Windows', 'WindowsNoEditor', 'WinGDK', 'WindowsClient', '') | ForEach-Object { if ($_) { Join-Path $base "$_\GameUserSettings.ini" } else { Join-Path $base 'GameUserSettings.ini' } } |
+        Where-Object { Test-Path -LiteralPath $_ } | Sort-Object { (Get-Item -LiteralPath $_).LastWriteTimeUtc } -Descending | Select-Object -First 1
+}
+function New-UeGame([string]$id, [string]$name, [string]$folder, [string]$exe, [string]$appId, [bool]$ue5, [string]$saved, [bool]$untested, [string]$note) {
+    if (-not $exe) { $exe = $folder }
+    if (-not $saved) { $saved = 'Saved\Config' }
+    $rm = '\\' + [regex]::Escape($folder) + '\\Binaries\\'
+    if ($appId) { $rm += '|steam://\w+/' + $appId + '\b' }
+    [pscustomobject]@{ Id = $id; Name = $name; Process = @("$exe*-Win64-Shipping", "$exe*-WinGDK-Shipping"); RouteMatch = $rm; Format = 'ini'; AddMissing = $true
+                       Settings = $(if ($ue5) { $Ue5Settings } else { $Ue4Settings }); UeFolder = $folder; UeSaved = $saved; Untested = $untested; Note = $note
+                       Configs = @(Join-Path $env:LOCALAPPDATA "$folder\$saved\$(if ($ue5) { 'Windows' } else { 'WindowsNoEditor' })\GameUserSettings.ini")
+                       Pin = @('try', 'Unreal Engine spreads work over several threads but still leans on its main and render threads. Test the game both ways.') }
+}
+
+# Fallout 4 VR: Documents\My Games\Fallout4VR\Fallout4Prefs.ini (same engine as Skyrim VR)
+$Fo4Settings = @(
+    New-PerfSetting 'VRDisplay/fRenderTargetSizeMultiplier' 'Render target size' 'Resolution & timing' $null '1.0 = the headset resolution. Often set in Fallout4Custom.ini instead.'
+    New-PerfSetting 'Display/iShadowMapResolution' 'Shadow resolution' 'Graphics (GPU)' @('1024', '2048', '2048', '4096') ''
+    New-PerfSetting 'Display/fDirShadowDistance' 'Shadow distance' 'Graphics (GPU)' @('2000.0000', '3000.0000', '4000.0000', '6000.0000') 'Also adds CPU work (more objects drawn into the shadows).'
+    New-PerfSetting 'Display/iDirShadowSplits' 'Shadow cascades (1-3)' 'Graphics (GPU)' @('1', '2', '2', '3') 'Above 3 causes problems.'
+    New-PerfSetting 'Display/bVolumetricLightingEnable' 'God rays (1 = on)' 'Graphics (GPU)' @('0', '0', '1', '1') 'Expensive.'
+    New-PerfSetting 'Display/iVolumetricLightingQuality' 'God rays quality (0-3)' 'Graphics (GPU)' @('0', '0', '1', '2') ''
+    New-PerfSetting 'Display/bSAOEnable' 'Ambient occlusion (1 = on)' 'Graphics (GPU)' @('0', '1', '1', '1') ''
+    New-PerfSetting 'Display/iMaxAnisotropy' 'Texture filtering (1-16)' 'Graphics (GPU)' @('4', '8', '16', '16') ''
+    New-PerfSetting 'LOD/fLODFadeOutMultObjects' 'Object detail distance' 'World detail (CPU)' $null 'Lower is cheaper on the CPU.'
+    New-PerfSetting 'LOD/fLODFadeOutMultActors' 'Character detail distance' 'World detail (CPU)' $null ''
+)
+
+# No Man's Sky: <game>\Binaries\SETTINGS\TKGRAPHICSSETTINGS.VR.MXML  (<Property name="Key" value="High" />)
+$NmsSettings = @(
+    New-PerfSetting 'ResolutionScale' 'Resolution scale' 'Resolution & timing' $null '1.000000 = the headset resolution.'
+    New-PerfSetting 'MotionBlurStrength' 'Motion blur strength' 'Graphics (GPU)' '0.000000' 'Blur is uncomfortable in VR.'
+    New-PerfSetting 'ShadowQuality' 'Shadows' 'Graphics (GPU)' @('Low', 'Medium', 'High', 'High') 'Low, Medium, High or Ultra.'
+    New-PerfSetting 'VolumetricsQuality' 'Volumetrics' 'Graphics (GPU)' @('Low', 'Medium', 'High', 'High') 'Clouds and fog - heavy.'
+    New-PerfSetting 'ReflectionsQuality' 'Reflections' 'Graphics (GPU)' @('Low', 'Low', 'Medium', 'High') ''
+    New-PerfSetting 'PostProcessingEffects' 'Post processing' 'Graphics (GPU)' @('Low', 'Low', 'Medium', 'High') ''
+    New-PerfSetting 'TerrainTessellation' 'Terrain tessellation' 'Graphics (GPU)' @('Low', 'Medium', 'High', 'High') ''
+    New-PerfSetting 'TextureQuality' 'Textures' 'Graphics (GPU)' $null 'Uses video memory more than speed.'
+    New-PerfSetting 'PlanetQuality' 'Planet quality' 'World detail (CPU)' @('Medium', 'High', 'High', 'High') 'Planet generation runs on the CPU.'
+    New-PerfSetting 'AnimationQuality' 'Animation quality' 'World detail (CPU)' @('Low', 'Medium', 'High', 'High') ''
+)
+
+# Elite Dangerous: Options\Graphics\Custom.4.0.fxcfg (<ShadowQuality>3</ShadowQuality>). Used when the in-game preset is Custom.
+$EliteSettings = @(
+    New-PerfSetting 'HMDRenderTargetMultiplier' 'Headset image quality' 'Resolution & timing' $null '1.0 = the headset resolution.'
+    New-PerfSetting 'SSAAMultiplier' 'Supersampling' 'Resolution & timing' $null '1.0 = off.'
+    New-PerfSetting 'ShadowQuality' 'Shadows (0-4)' 'Graphics (GPU)' @('1', '2', '3', '4') ''
+    New-PerfSetting 'AOQuality' 'Ambient occlusion (0-3)' 'Graphics (GPU)' @('0', '1', '2', '3') ''
+    New-PerfSetting 'TerrainQuality' 'Terrain (0-3)' 'Graphics (GPU)' @('0', '1', '2', '3') ''
+    New-PerfSetting 'MaterialQuality' 'Materials (0-3)' 'Graphics (GPU)' @('1', '2', '3', '3') ''
+    New-PerfSetting 'VolumetricsQuality' 'Volumetrics (0-3)' 'Graphics (GPU)' @('0', '1', '2', '3') 'Heavy.'
+    New-PerfSetting 'FXQuality' 'Effects (0-3)' 'Graphics (GPU)' @('1', '2', '3', '3') ''
+    New-PerfSetting 'BloomQuality' 'Bloom (0-2)' 'Graphics (GPU)' @('0', '1', '2', '2') ''
+    New-PerfSetting 'DOFEnabled' 'Depth of field (1 = on)' 'Graphics (GPU)' '0' 'Blurs things in VR.'
+    New-PerfSetting 'BlurEnabled' 'Blur (true/false)' 'Graphics (GPU)' 'false' ''
+    New-PerfSetting 'EnvironmentQuality' 'Environment (0-3)' 'World detail (CPU)' @('1', '2', '3', '3') ''
+    New-PerfSetting 'LODDistanceScale' 'Model draw distance' 'World detail (CPU)' @('0.900000', '1.000000', '1.000000', '1.000000') 'The game ignores values above 1.0.'
+)
+
+# Star Wars: Squadrons: Documents\STAR WARS Squadrons (Steam)\settings\ProfileOptions_profile  (GstRender.Key value)
+$SquadronsSettings = @(
+    New-PerfSetting 'GstRender.ResolutionScaleVR' 'Resolution scale (VR)' 'Resolution & timing' $null '1.0 = the headset resolution; the game''s default is 0.75-0.8.'
+    New-PerfSetting 'GstRender.EnableDynamicResolution' 'Dynamic resolution (1 = on)' 'Resolution & timing' '0' 'Keeps the resolution steady.'
+    New-PerfSetting 'GstRender.VSyncEnabled' 'V-sync (1 = on)' 'Resolution & timing' '0' 'The headset paces the frames in VR.'
+    New-PerfSetting 'GstRender.OverallGraphicsQuality_VR' 'VR preset (5 = custom)' 'Graphics (GPU)' '5' 'Custom, so the settings below are used.'
+    New-PerfSetting 'GstRender.PostProcessQuality_VR' 'Post processing (VR)' 'Graphics (GPU)' @('0', '1', '1', '2') ''
+    New-PerfSetting 'GstRender.MotionBlurEnabled_VR' 'Motion blur (VR, 1 = on)' 'Graphics (GPU)' '0' 'Blur is uncomfortable in VR.'
+    New-PerfSetting 'GstRender.HdrEnable' 'HDR (1 = on)' 'Graphics (GPU)' '0' 'HDR washes the picture out in VR.'
+    New-PerfSetting 'GstRender.TemporalAASharpening' 'Sharpening (0-1)' 'Graphics (GPU)' $null ''
+)
+
+# Star Citizen: <install>\StarCitizen\LIVE\USER.cfg (key = value). The game reads it at every start; it's made if missing.
+$StarCitizenSettings = @(
+    New-PerfSetting 'r_VSync' 'V-sync (1 = on)' 'Resolution & timing' '0' 'The headset paces the frames in VR.'
+    New-PerfSetting 'sys_spec_Shadows' 'Shadows (1-4)' 'Graphics (GPU)' @('1', '2', '3', '3') ''
+    New-PerfSetting 'sys_spec_Shading' 'Shading (1-4)' 'Graphics (GPU)' @('1', '2', '3', '3') ''
+    New-PerfSetting 'sys_spec_PostProcessing' 'Post processing (1-4)' 'Graphics (GPU)' '1' ''
+    New-PerfSetting 'sys_spec_VolumetricEffects' 'Volumetric effects (1-4)' 'Graphics (GPU)' @('1', '1', '2', '3') 'Heavy.'
+    New-PerfSetting 'sys_spec_Texture' 'Textures (1-4)' 'Graphics (GPU)' $null 'Uses video memory more than speed.'
+    New-PerfSetting 'r_MotionBlur' 'Motion blur (1 = on)' 'Graphics (GPU)' '0' 'Blur is uncomfortable in VR.'
+    New-PerfSetting 'r_DepthOfField' 'Depth of field (1 = on)' 'Graphics (GPU)' '0' ''
+    New-PerfSetting 'sys_spec_ObjectDetail' 'Object detail (1-4)' 'World detail (CPU)' @('2', '3', '3', '4') ''
+    New-PerfSetting 'sys_spec_Particles' 'Particles (1-4)' 'World detail (CPU)' @('2', '3', '3', '4') ''
+)
+function Get-StarCitizenCfg {
+    foreach ($dr in [IO.DriveInfo]::GetDrives() | Where-Object { $_.DriveType -eq 'Fixed' -and $_.IsReady }) {
+        foreach ($rel in 'Program Files\Roberts Space Industries\StarCitizen\LIVE', 'Roberts Space Industries\StarCitizen\LIVE', 'Games\Roberts Space Industries\StarCitizen\LIVE', 'StarCitizen\LIVE') {
+            $live = Join-Path $dr.RootDirectory.FullName $rel
+            if (Test-Path -LiteralPath (Join-Path $live 'Bin64')) {
+                $f = Join-Path $live 'USER.cfg'
+                if (-not (Test-Path -LiteralPath $f)) { try { [IO.File]::WriteAllText($f, '') } catch { } }   # an empty USER.cfg changes nothing
+                if (Test-Path -LiteralPath $f) { return $f }
+            }
+        }
+    }
+}
+
+# War Thunder: <game>\config.blk  (graphics{ shadowQuality:t="medium" ... })
+$WarThunderSettings = @(
+    New-PerfSetting 'graphics/ssaa' 'Supersampling (1 = off, 4 = on)' 'Resolution & timing' $null 'Supersampling costs far too much in VR.'
+    New-PerfSetting 'graphics/shadowQuality' 'Shadows' 'Graphics (GPU)' @('low', 'medium', 'high', 'high') 'ultralow, low, medium, high or ultrahigh.'
+    New-PerfSetting 'graphics/waterQuality' 'Water' 'Graphics (GPU)' @('low', 'medium', 'high', 'high') ''
+    New-PerfSetting 'graphics/fxDensityMul' 'Effects density (0.1-1)' 'Graphics (GPU)' @('0.5', '0.7', '0.8', '1') ''
+    New-PerfSetting 'graphics/anisotropy' 'Texture filtering (1-16)' 'Graphics (GPU)' @('8', '16', '16', '16') ''
+    New-PerfSetting 'graphics/texquality' 'Textures' 'Graphics (GPU)' $null 'Uses video memory more than speed.'
+    New-PerfSetting 'graphics/grassRadiusMul' 'Grass distance (0.1-1)' 'World detail (CPU)' @('0.3', '0.5', '0.75', '1') ''
+    New-PerfSetting 'graphics/rendinstDistMul' 'Object draw distance' 'World detail (CPU)' @('0.7', '1', '1', '1.5') 'More objects means more work for the CPU.'
+)
+
+# IL-2 Sturmovik: Great Battles: <game>\data\startup.cfg  ([KEY = graphics] ... key = value ... [END])
+$Il2Settings = @(
+    New-PerfSetting 'KEY = graphics/vsync' 'V-sync (1 = on)' 'Resolution & timing' '0' 'The headset paces the frames in VR.'
+    New-PerfSetting 'KEY = graphics/fps_limit' 'Frame rate limit (0 = off)' 'Resolution & timing' '0' ''
+    New-PerfSetting 'KEY = graphics/shadows_quality' 'Shadows' 'Graphics (GPU)' @('1', '1', '2', '3') '0 = off.'
+    New-PerfSetting 'KEY = graphics/ssao_enable' 'Ambient occlusion (1 = on)' 'Graphics (GPU)' @('0', '0', '0', '1') ''
+    New-PerfSetting 'KEY = graphics/hdr_enable' 'HDR (1 = on)' 'Graphics (GPU)' '0' 'VR guides turn it off.'
+    New-PerfSetting 'KEY = graphics/bloom_enable' 'Bloom (1 = on)' 'Graphics (GPU)' '0' ''
+    New-PerfSetting 'KEY = graphics/post_sharpen' 'Sharpening (1 = on)' 'Graphics (GPU)' '1' 'Makes distant planes easier to spot.'
+    New-PerfSetting 'KEY = graphics/grass_distance' 'Grass distance' 'World detail (CPU)' $null ''
+)
+
+# rFactor 2 / Le Mans Ultimate: UserData\player\player.JSON ("Graphic Options": { ... })
+$Rf2Settings = @(
+    New-PerfSetting 'Max Framerate' 'Frame rate limit (0 = off)' 'Resolution & timing' '0' 'The headset paces the frames in VR.'
+    New-PerfSetting 'Player Detail' 'Your car detail (0-3)' 'Graphics (GPU)' @('2', '3', '3', '3') ''
+    New-PerfSetting 'Texture Detail' 'Textures (0-3)' 'Graphics (GPU)' $null 'Uses video memory more than speed.'
+    New-PerfSetting 'Texture Filter' 'Texture filtering (0-5)' 'Graphics (GPU)' @('4', '4', '5', '5') ''
+    New-PerfSetting 'Shadows' 'Shadows (0-4)' 'Graphics (GPU)' @('1', '1', '2', '3') ''
+    New-PerfSetting 'Shadow Blur' 'Shadow blur (0-3)' 'Graphics (GPU)' @('0', '0', '1', '2') ''
+    New-PerfSetting 'Special FX' 'Special effects (0-4)' 'Graphics (GPU)' @('1', '2', '3', '4') ''
+    New-PerfSetting 'Heat FX Fade Speed' 'Heat haze (0 = off)' 'Graphics (GPU)' '0' 'Heat haze looks wrong in VR.'
+    New-PerfSetting 'Track Detail' 'Track detail (0-3)' 'World detail (CPU)' @('0', '1', '1', '2') ''
+    New-PerfSetting 'Opponent Detail' 'Opponent detail (0-3)' 'World detail (CPU)' @('0', '1', '2', '2') ''
+    New-PerfSetting 'Max Visible Vehicles' 'Visible cars' 'World detail (CPU)' @('8', '10', '12', '16') 'The biggest CPU setting in full grids.'
+    New-PerfSetting 'Road Reflections' 'Road reflections (0-3)' 'World detail (CPU)' @('1', '1', '1', '2') 'Costs a lot of CPU time.'
+    New-PerfSetting 'Environment Reflections' 'Environment reflections (0-4)' 'World detail (CPU)' @('0', '1', '1', '2') ''
+    New-PerfSetting 'Soft Particles' 'Soft particles (0-2)' 'World detail (CPU)' @('1', '1', '2', '2') ''
+    New-PerfSetting 'Rain FX Quality' 'Rain effects (1-5)' 'World detail (CPU)' @('1', '2', '2', '3') 'Very heavy in rain.'
+    New-PerfSetting 'Rearview_Back_Clip' 'Mirror view distance (m)' 'World detail (CPU)' @('100', '140', '240', '240') 'Mirrors draw the scene again.'
+)
+$LmuSettings = @(
+    New-PerfSetting 'Max Visible Vehicles' 'Visible cars' 'World detail (CPU)' @('8', '10', '12', '15') 'The official guide suggests 10 or fewer in VR.'
+    New-PerfSetting 'Extra Visible Vehicles' 'Extra visible cars' 'World detail (CPU)' @('5', '5', '10', '20') ''
+    New-PerfSetting 'Wind and Crowd Motion' 'Wind and crowd motion' 'World detail (CPU)' @('false', 'false', 'true', 'true') ''
+    New-PerfSetting 'Special FX' 'Special effects (0-4)' 'Graphics (GPU)' @('0', '1', '2', '3') ''
+    New-PerfSetting 'Soft Particles' 'Soft particles (0-2)' 'Graphics (GPU)' @('0', '1', '1', '2') ''
+    New-PerfSetting 'Max Headlights' 'Headlights' 'Graphics (GPU)' @('2', '4', '8', '12') ''
+    New-PerfSetting 'Live TV Displays' 'Live TV screens (1 = on)' 'Graphics (GPU)' @('0', '0', '1', '1') ''
+    New-PerfSetting 'Heat FX Fade Speed' 'Heat haze (0 = off)' 'Graphics (GPU)' '0' 'Heat haze looks wrong in VR.'
+)
+
+# F1 24 / F1 25 and DiRT Rally 2.0: hardwaresettings\hardware_settings_config_vr.xml  (<shadows size="2048" ... />: element/attribute)
+$F1Settings = @(
+    New-PerfSetting 'dynamicresolution_enabled/value' 'Dynamic resolution' 'Resolution & timing' 'false' 'Keeps the resolution steady.'
+    New-PerfSetting 'lighting/quality' 'Lighting' 'Graphics (GPU)' @('0', '1', '1', '2') ''
+    New-PerfSetting 'shadows/worldShadowMapSize' 'Shadow size' 'Graphics (GPU)' @('1024', '2048', '2048', '4096') ''
+    New-PerfSetting 'ssao/enabled' 'Ambient occlusion' 'Graphics (GPU)' @('false', 'false', 'true', 'true') ''
+    New-PerfSetting 'ssrt/enabled' 'Screen space reflections' 'Graphics (GPU)' 'false' ''
+    New-PerfSetting 'particles/high' 'High quality particles' 'Graphics (GPU)' @('false', 'false', 'true', 'true') ''
+    New-PerfSetting 'weather_effects/planarReflectionsEnabled' 'Wet road reflections' 'Graphics (GPU)' @('false', 'false', 'true', 'true') ''
+    New-PerfSetting 'postprocess/motionBlur' 'Motion blur' 'Graphics (GPU)' 'false' 'Blur is uncomfortable in VR.'
+    New-PerfSetting 'postprocess/depthOfField' 'Depth of field' 'Graphics (GPU)' 'false' ''
+    New-PerfSetting 'rt_shadows/enabled' 'Ray-traced shadows' 'Graphics (GPU)' 'false' 'Far too heavy for VR.'
+    New-PerfSetting 'rt_reflections/enabled' 'Ray-traced reflections' 'Graphics (GPU)' 'false' ''
+    New-PerfSetting 'rt_ao/enabled' 'Ray-traced ambient occlusion' 'Graphics (GPU)' 'false' ''
+    New-PerfSetting 'anisotropic_filter/level' 'Texture filtering (0-16)' 'Graphics (GPU)' @('8', '16', '16', '16') ''
+    New-PerfSetting 'crowd/distanceScale' 'Crowd distance' 'World detail (CPU)' @('0.5', '0.75', '1.0', '1.0') ''
+)
+$Dr2Settings = @(
+    New-PerfSetting 'shadows/size' 'Shadow size' 'Graphics (GPU)' @('512', '1024', '2048', '2048') '2048 to 1024 gave +32% frame rate in one test.'
+    New-PerfSetting 'shadows/maskQuality' 'Shadow mask (0-2)' 'Graphics (GPU)' @('0', '0', '1', '1') ''
+    New-PerfSetting 'shadows/grass' 'Grass shadows' 'Graphics (GPU)' @('false', 'false', 'false', 'true') ''
+    New-PerfSetting 'shadows/particles' 'Particle shadows' 'Graphics (GPU)' @('false', 'false', 'false', 'true') ''
+    New-PerfSetting 'screenspace_reflections/enabled' 'Screen space reflections' 'Graphics (GPU)' 'false' ''
+    New-PerfSetting 'dynamic_ambient_occ/enabled' 'Ambient occlusion' 'Graphics (GPU)' @('false', 'true', 'true', 'true') ''
+    New-PerfSetting 'night_lighting/volumes' 'Night light volumes' 'Graphics (GPU)' 'false' ''
+    New-PerfSetting 'weather/quality' 'Weather (0-2)' 'Graphics (GPU)' @('0', '1', '1', '2') ''
+    New-PerfSetting 'envmap/size' 'Car reflections size' 'Graphics (GPU)' @('128', '128', '256', '512') ''
+    New-PerfSetting 'motion_blur/enabled' 'Motion blur' 'Graphics (GPU)' 'false' 'Blur is uncomfortable in VR.'
+    New-PerfSetting 'ground_cover/clutter' 'Ground clutter' 'Graphics (GPU)' @('false', 'false', 'true', 'true') ''
+    New-PerfSetting 'envmap/facesPerFrame' 'Car reflection updates (1-6)' 'World detail (CPU)' @('1', '2', '3', '6') ''
+    New-PerfSetting 'crowd/detail' 'Crowd (0-2)' 'World detail (CPU)' @('0', '1', '2', '2') ''
+    New-PerfSetting 'objects/lod' 'Object detail' 'World detail (CPU)' @('0.8', '1.0', '1.0', '1.25') ''
+    New-PerfSetting 'trees/lod' 'Tree detail' 'World detail (CPU)' @('0.8', '1.0', '1.0', '1.25') ''
+    New-PerfSetting 'mirrors/enabled' 'Mirrors' 'World detail (CPU)' @('false', 'false', 'true', 'true') 'Mirrors draw the scene again.'
+)
+
+# EA Sports WRC: %LOCALAPPDATA%\WRC\Saved\Config\WindowsNoEditor\GameUserSettings.ini - its own VR settings (0 = lowest)
+$WrcSettings = @(
+    New-PerfSetting '/Script/WRC.OptionsAdvancedGraphicsSettings/VRShadowQuality' 'Shadows' 'Graphics (GPU)' @('0', '0', '1', '2') ''
+    New-PerfSetting '/Script/WRC.OptionsAdvancedGraphicsSettings/VRShaderQuality' 'Shaders' 'Graphics (GPU)' @('0', '1', '1', '2') ''
+    New-PerfSetting '/Script/WRC.OptionsAdvancedGraphicsSettings/VRParticleQuality' 'Particles' 'Graphics (GPU)' @('0', '1', '1', '2') ''
+    New-PerfSetting '/Script/WRC.OptionsAdvancedGraphicsSettings/VRPostProcessQuality' 'Post processing' 'Graphics (GPU)' '0' ''
+    New-PerfSetting '/Script/WRC.OptionsAdvancedGraphicsSettings/VRTextureQuality' 'Textures' 'Graphics (GPU)' $null 'Uses video memory more than speed.'
+    New-PerfSetting '/Script/WRC.OptionsAdvancedGraphicsSettings/VRGroundCover' 'Ground cover' 'Graphics (GPU)' @('1', '2', '2', '3') ''
+    New-PerfSetting '/Script/WRC.OptionsAdvancedGraphicsSettings/VRCarReflection' 'Car reflections' 'Graphics (GPU)' @('0', '0', '1', '1') ''
+    New-PerfSetting '/Script/WRC.OptionsAdvancedGraphicsSettings/VRWater' 'Water' 'Graphics (GPU)' @('0', '0', '1', '1') ''
+    New-PerfSetting '/Script/WRC.OptionsAdvancedGraphicsSettings/bVRAdvancedFog' 'Advanced fog' 'Graphics (GPU)' @('False', 'False', 'True', 'True') ''
+    New-PerfSetting '/Script/WRC.OptionsAdvancedGraphicsSettings/VRDistanceQuality' 'View distance' 'World detail (CPU)' @('1', '1', '2', '2') ''
+    New-PerfSetting '/Script/WRC.OptionsAdvancedGraphicsSettings/VRTrees' 'Trees' 'World detail (CPU)' @('1', '1', '2', '2') ''
+    New-PerfSetting '/Script/WRC.OptionsAdvancedGraphicsSettings/VRObjects' 'Objects' 'World detail (CPU)' @('0', '1', '1', '2') ''
+    New-PerfSetting '/Script/WRC.OptionsAdvancedGraphicsSettings/VRCrowd' 'Crowd' 'World detail (CPU)' @('0', '0', '1', '1') ''
+    New-PerfSetting '/Script/WRC.OptionsAdvancedGraphicsSettings/VRMirrors' 'Mirrors' 'World detail (CPU)' @('0', '0', '1', '1') 'Mirrors draw the scene again.'
+)
+
+# Into the Radius 2: Documents\My Games\IntoTheRadius2\settings.ini  ([Graphics] Low / Medium / High)
+$Itr2Settings = @(
+    New-PerfSetting 'Graphics/OverallQuality' 'Preset' 'Graphics (GPU)' 'Custom' 'Custom, so the settings below are used.'
+    New-PerfSetting 'Graphics/ShadowQuality' 'Shadows' 'Graphics (GPU)' @('Low', 'Medium', 'High', 'High') 'Shadows also cost a lot of CPU time in this game.'
+    New-PerfSetting 'Graphics/Effects' 'Effects' 'Graphics (GPU)' @('Medium', 'High', 'High', 'High') ''
+    New-PerfSetting 'Graphics/Geometry' 'Geometry' 'Graphics (GPU)' @('Medium', 'High', 'High', 'High') ''
+    New-PerfSetting 'Graphics/Textures' 'Textures' 'Graphics (GPU)' $null 'Uses video memory more than speed.'
+    New-PerfSetting 'Graphics/FoliageDensity' 'Foliage density' 'World detail (CPU)' @('Low', 'Low', 'Medium', 'High') ''
+    New-PerfSetting 'Graphics/ViewDistance' 'View distance' 'World detail (CPU)' @('Medium', 'Medium', 'High', 'High') ''
+)
+
+# Blade & Sorcery: Documents\My Games\BladeAndSorcery\Saves\Default\Options.opt (JSON; Steam and Meta versions)
+$BnsSettings = @(
+    New-PerfSetting 'renderScale' 'Render scale' 'Resolution & timing' $null '1.0 = the headset resolution.'
+    New-PerfSetting 'foveationLevel' 'Foveated rendering (0 = off)' 'Resolution & timing' $null ''
+    New-PerfSetting 'msaa' 'Anti-aliasing (MSAA 0/2/4/8)' 'Graphics (GPU)' @('2', '2', '4', '4') '8x is very heavy.'
+    New-PerfSetting 'shadowDistance' 'Shadow distance' 'Graphics (GPU)' @('20.0', '30.0', '40.0', '50.0') ''
+    New-PerfSetting 'oceanQuality' 'Water' 'Graphics (GPU)' @('Low', 'Low', 'Medium', 'High') ''
+    New-PerfSetting 'textureLimit' 'Texture limit (0 = full)' 'Graphics (GPU)' $null 'Uses video memory more than speed.'
+    New-PerfSetting 'lodBias' 'Detail distance' 'World detail (CPU)' $null 'Higher keeps more detail further away.'
+    New-PerfSetting 'maxDecals' 'Blood and damage decals' 'World detail (CPU)' @('25', '50', '50', '100') ''
+    New-PerfSetting 'maxDeadCount' 'Bodies left in the world' 'World detail (CPU)' @('2', '3', '4', '6') 'Ragdoll physics runs on the main thread.'
+    New-PerfSetting 'maxDropCount' 'Dropped items left in the world' 'World detail (CPU)' @('3', '5', '8', '10') ''
+)
+
+# BeamNG.drive: %LOCALAPPDATA%\BeamNG(.drive)\<version>\settings\settings.json (one line of JSON)
+$BeamSettings = @(
+    New-PerfSetting 'vsync' 'V-sync' 'Resolution & timing' 'false' 'The headset paces the frames in VR.'
+    New-PerfSetting 'GraphicMeshQuality' 'Mesh quality' 'Graphics (GPU)' @('Low', 'Normal', 'High', 'High') 'Lowest, Low, Normal or High.'
+    New-PerfSetting 'GraphicShaderQuality' 'Shader quality' 'Graphics (GPU)' @('Low', 'Normal', 'High', 'High') ''
+    New-PerfSetting 'GraphicLightingQuality' 'Lighting quality' 'Graphics (GPU)' @('Low', 'Normal', 'High', 'High') ''
+    New-PerfSetting 'GraphicShadowsQuality' 'Shadows' 'Graphics (GPU)' @('Low', 'Normal', 'High', 'High') ''
+    New-PerfSetting 'GraphicPostfxQuality' 'Post processing' 'Graphics (GPU)' @('Low', 'Normal', 'Normal', 'High') ''
+    New-PerfSetting 'PostFXSSAOGeneralEnabled' 'Ambient occlusion' 'Graphics (GPU)' @('false', 'true', 'true', 'true') ''
+    New-PerfSetting 'PostFXMotionBlurEnabled' 'Motion blur' 'Graphics (GPU)' 'false' 'Blur is uncomfortable in VR.'
+    New-PerfSetting 'PostFXDOFGeneralEnabled' 'Depth of field' 'Graphics (GPU)' 'false' ''
+    New-PerfSetting 'GraphicDynReflectionEnabled' 'Dynamic reflections' 'Graphics (GPU)' @('false', 'false', 'true', 'true') ''
+    New-PerfSetting 'GraphicAnisotropic' 'Texture filtering (0-16)' 'Graphics (GPU)' @('8', '16', '16', '16') ''
+    New-PerfSetting 'GraphicTextureQuality' 'Textures' 'Graphics (GPU)' $null 'Uses video memory more than speed.'
+    New-PerfSetting 'GraphicDynMirrorsEnabled' 'Mirrors' 'World detail (CPU)' @('false', 'true', 'true', 'true') 'Mirrors draw the scene again.'
+    New-PerfSetting 'GraphicDynMirrorsDistance' 'Mirror distance' 'World detail (CPU)' @('150', '200', '300', '300') ''
+    New-PerfSetting 'GraphicGrassDensity' 'Grass density (0-1)' 'World detail (CPU)' @('0.5', '0.75', '1', '1') ''
+)
+function Get-BeamNgSettings {
+    foreach ($root in (Join-Path $env:LOCALAPPDATA 'BeamNG\BeamNG.drive'), (Join-Path $env:LOCALAPPDATA 'BeamNG.drive')) {
+        if (-not (Test-Path -LiteralPath $root)) { continue }
+        $c = Join-Path $root 'current\settings\settings.json'; if (Test-Path -LiteralPath $c) { return $c }
+        $v = Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^\d+\.\d+$' -and (Test-Path -LiteralPath (Join-Path $_.FullName 'settings\settings.json')) } |
+             Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
+        if ($v) { return (Join-Path $v.FullName 'settings\settings.json') }
+    }
+}
+$UntestedNote = 'Settings for this game come from published guides and haven''t been checked against a real install yet. A setting that shows "Not in the file" isn''t used by your version.'
+
 $Docs = [Environment]::GetFolderPath('MyDocuments')
 $PerfGames = @(
     [pscustomobject]@{ Id = 'ats'; Name = 'American Truck Simulator'; Process = 'amtrucks'; RouteMatch = '\\amtrucks\.exe|steam://\w+/270880\b'; Format = 'scs'; Settings = $ScsSettings
@@ -343,6 +650,82 @@ $PerfGames = @(
     [pscustomobject]@{ Id = 'skyrimvr'; Name = 'Skyrim VR'; Process = 'SkyrimVR'; RouteMatch = 'SkyrimVR|steam://\w+/611670\b'; Format = 'ini'; Settings = $SkyrimSettings
                        Configs = @({ Get-SkyrimVrPrefs }) }
 )
+$PerfGames += @(
+    # Checked against the real files on a PC that has them
+    [pscustomobject]@{ Id = 'bns'; Name = 'Blade & Sorcery'; Process = 'BladeAndSorcery'; RouteMatch = 'BladeAndSorcery|warpfrog-blade-sorcery|steam://\w+/629730\b'; Format = 'json'; Settings = $BnsSettings
+                       Configs = @(Join-Path $Docs 'My Games\BladeAndSorcery\Saves\Default\Options.opt')
+                       Pin = @('try', 'Blade & Sorcery (Unity) runs its physics on the main thread, so big fights can be CPU-limited. Test a busy fight both ways.') }
+    [pscustomobject]@{ Id = 'beamng'; Name = 'BeamNG.drive'; Process = @('BeamNG.drive.x64', 'BeamNG.drive'); RouteMatch = 'BeamNG|steam://\w+/284160\b'; Format = 'json'; Settings = $BeamSettings
+                       Configs = @({ Get-BeamNgSettings })
+                       Pin = @('try', 'BeamNG runs each car''s physics on its own thread, so traffic uses many cores. Test it both ways.') }
+    New-UeGame 'pavlov' 'Pavlov' 'Pavlov' '' '555160' $true '' $false 'Pavlov only writes the settings you changed in its menu; locked ones that are missing are added.'
+    New-UeGame 'contractors' 'Contractors' 'Contractors_UE4_22' '' '963930' $false '' $false ''
+    New-UeGame 'contractorsshowdown' 'Contractors Showdown' 'Contractors_Showdown' '' '' $true '' $false ''
+    New-UeGame 'kartkraft' 'KartKraft' 'project_k' '' '406350' $false '' $false ''
+    New-UeGame 'mw5mercs' 'MechWarrior 5: Mercenaries' 'MW5Mercs' 'MechWarrior' '784080' $false '' $false ''
+    New-UeGame 'mw5clans' 'MechWarrior 5: Clans' 'MW5Clans' 'MechWarrior' '' $true '' $false ''
+    # From published guides (not yet checked against a real install)
+    [pscustomobject]@{ Id = 'fo4vr'; Name = 'Fallout 4 VR'; Process = 'Fallout4VR'; RouteMatch = 'Fallout4VR|steam://\w+/611660\b'; Format = 'ini'; Settings = $Fo4Settings; Untested = $true
+                       Configs = @(Join-Path $Docs 'My Games\Fallout4VR\Fallout4Prefs.ini')
+                       Pin = @('yes', 'Fallout 4 VR''s engine (the same as Skyrim''s) leans on one main thread, so keeping it on the fast cores helps.') }
+    [pscustomobject]@{ Id = 'nms'; Name = 'No Man''s Sky'; Process = 'NMS'; RouteMatch = '\\NMS\.exe|steam://\w+/275850\b'; Format = 'xmlattr'; Settings = $NmsSettings; Untested = $true
+                       Configs = @({ Join-SteamApp '275850' 'Binaries\SETTINGS\TKGRAPHICSSETTINGS.VR.MXML' }); Note = 'This is the VR copy of the settings; the flat-screen ones are in TKGRAPHICSSETTINGS.MXML. A Steam file check can replace it.'
+                       Pin = @('try', 'No Man''s Sky builds planets on many threads, but stutter on planets is often CPU-side. Test it both ways.') }
+    [pscustomobject]@{ Id = 'elite'; Name = 'Elite Dangerous'; Process = 'EliteDangerous64'; RouteMatch = 'Elite Dangerous|EliteDangerous64|steam://\w+/359320\b'; Format = 'xmltag'; Settings = $EliteSettings; Untested = $true
+                       Configs = @((Join-Path $env:LOCALAPPDATA 'Frontier Developments\Elite Dangerous\Options\Graphics\Custom.4.0.fxcfg'), (Join-Path $env:LOCALAPPDATA 'Frontier Developments\Elite Dangerous\Options\Graphics\Custom.fxcfg'))
+                       Note = 'The game only uses these when its graphics preset is set to Custom.'
+                       Pin = @('try', 'Space and planets are limited by the graphics card, but Odyssey settlements lean on the main thread. Test it both ways.') }
+    [pscustomobject]@{ Id = 'squadrons'; Name = 'Star Wars: Squadrons'; Process = 'starwarssquadrons'; RouteMatch = 'starwarssquadrons|STAR WARS Squadrons|steam://\w+/1222730\b'; Format = 'msfs'; Settings = $SquadronsSettings; Untested = $true
+                       Configs = @((Join-Path $Docs 'STAR WARS Squadrons Steam\settings\ProfileOptions_profile'), (Join-Path $Docs 'STAR WARS Squadrons\settings\ProfileOptions_profile'))
+                       Pin = @('no', 'Squadrons is light on the CPU and limited by the graphics card, so this won''t add frames.') }
+    [pscustomobject]@{ Id = 'starcitizen'; Name = 'Star Citizen'; Process = 'StarCitizen'; RouteMatch = 'StarCitizen|Roberts Space Industries'; Format = 'ini'; AddMissing = $true; Settings = $StarCitizenSettings; Untested = $true
+                       Configs = @({ Get-StarCitizenCfg }); Note = 'Settings go in USER.cfg, which the game reads every time it starts (an empty one is made if it''s missing). VR in Star Citizen is still experimental.'
+                       Pin = @('try', 'Star Citizen is heavily limited by the CPU and its servers, and its own core settings are ignored, so this is the only way to steer it. Test it both ways.') }
+    [pscustomobject]@{ Id = 'warthunder'; Name = 'War Thunder'; Process = 'aces'; RouteMatch = 'War Thunder|\\aces\.exe|steam://\w+/236390\b'; Format = 'blk'; Settings = $WarThunderSettings; Untested = $true
+                       Configs = @({ Join-SteamApp '236390' 'config.blk' }, 'C:\Program Files\WarThunder\config.blk', (Join-Path $env:LOCALAPPDATA 'WarThunder\config.blk'))
+                       Note = 'Changing graphics in the launcher can switch the game back to a preset; the guard puts these values back afterwards.'
+                       Pin = @('try', 'War Thunder is often limited by the CPU in VR and doesn''t spread its work well. Test it both ways.') }
+    [pscustomobject]@{ Id = 'il2'; Name = 'IL-2 Sturmovik: Great Battles'; Process = 'Il-2'; RouteMatch = 'IL-2 Sturmovik|\\Il-2\.exe|steam://\w+/307960\b'; Format = 'ini'; Settings = $Il2Settings; Untested = $true
+                       Configs = @({ Join-SteamApp '307960' 'data\startup.cfg' }, 'C:\Program Files\IL-2 Sturmovik Great Battles\data\startup.cfg')
+                       Pin = @('yes', 'IL-2 leans on one main thread (AI and ground units), so keeping it on the fast cores helps.') }
+    [pscustomobject]@{ Id = 'rf2'; Name = 'rFactor 2'; Process = 'rFactor2'; RouteMatch = 'rFactor 2|\\rFactor2\.exe|steam://\w+/365960\b'; Format = 'json'; JsonParents = @('Graphic Options'); Settings = $Rf2Settings; Untested = $true
+                       Configs = @({ Join-SteamApp '365960' 'UserData\player\player.JSON' })
+                       Pin = @('try', 'rFactor 2 is limited by the CPU with full grids, mirrors and reflections. Test a full grid both ways.') }
+    [pscustomobject]@{ Id = 'lmu'; Name = 'Le Mans Ultimate'; Process = 'Le Mans Ultimate'; RouteMatch = 'Le Mans Ultimate|steam://\w+/2399420\b'; Format = 'json'; JsonParents = @('Graphic Options'); Settings = $LmuSettings; Untested = $true
+                       Configs = @({ Join-SteamApp '2399420' 'UserData\player\Settings.JSON' }, { Join-SteamApp '2399420' 'UserData\player\player.JSON' })
+                       Pin = @('try', 'Le Mans Ultimate (rFactor 2 engine) is limited by the CPU with full grids. Test a full grid both ways.') }
+    [pscustomobject]@{ Id = 'f124'; Name = 'F1 24'; Process = 'F1_24'; RouteMatch = 'F1 24|F1_24|steam://\w+/2488620\b'; Format = 'xmlelem'; Settings = $F1Settings; Untested = $true
+                       Configs = @(Join-Path $Docs 'My Games\F1 24\hardwaresettings\hardware_settings_config_vr.xml')
+                       Pin = @('try', 'F1 is mostly limited by the graphics card in VR. Test it both ways.') }
+    [pscustomobject]@{ Id = 'f125'; Name = 'F1 25'; Process = 'F1_25'; RouteMatch = 'F1 25|F1_25|steam://\w+/3059520\b'; Format = 'xmlelem'; Settings = $F1Settings; Untested = $true
+                       Configs = @(Join-Path $Docs 'My Games\F1 25\hardwaresettings\hardware_settings_config_vr.xml')
+                       Pin = @('try', 'F1 is mostly limited by the graphics card in VR. Test it both ways.') }
+    [pscustomobject]@{ Id = 'dr2'; Name = 'DiRT Rally 2.0'; Process = 'dirtrally2'; RouteMatch = 'DiRT Rally 2|dirtrally2|steam://\w+/690790\b'; Format = 'xmlelem'; Settings = $Dr2Settings; Untested = $true
+                       Configs = @(Join-Path $Docs 'My Games\DiRT Rally 2.0\hardwaresettings\hardware_settings_config_vr.xml')
+                       Note = 'The game makes a new file if your graphics card changes; lock again after a new card.'
+                       Pin = @('try', 'DiRT Rally 2.0 is mostly limited by the graphics card, with CPU spikes at the start of a stage. Test it both ways.') }
+    [pscustomobject]@{ Id = 'eawrc'; Name = 'EA Sports WRC'; Process = @('WRC', 'WRC-Win64-Shipping'); RouteMatch = '\\WRC\\|\\WRC\.exe|steam://\w+/1849250\b'; Format = 'ini'; Settings = $WrcSettings; Untested = $true
+                       Configs = @(Join-Path $env:LOCALAPPDATA 'WRC\Saved\Config\WindowsNoEditor\GameUserSettings.ini')
+                       Note = 'These are the game''s own VR settings (VR... in the file); the flat-screen settings are left alone.'
+                       Pin = @('try', 'EA Sports WRC is mostly limited by the graphics card, plus shader stutter. Test it both ways.') }
+    [pscustomobject]@{ Id = 'itr2'; Name = 'Into the Radius 2'; Process = 'IntoTheRadius2*'; RouteMatch = 'IntoTheRadius2|steam://\w+/2307350\b'; Format = 'ini'; Settings = $Itr2Settings; Untested = $true
+                       Configs = @(Join-Path $Docs 'My Games\IntoTheRadius2\settings.ini')
+                       Pin = @('try', 'Shadows and foliage make Into the Radius 2 CPU-heavy in open areas. Test it both ways.') }
+    New-UeGame 'twd' 'The Walking Dead: Saints & Sinners' 'TWD' '' '916840' $false '' $true ''
+    New-UeGame 'mohab' 'Medal of Honor: Above and Beyond' 'Mohab' '' '1402320' $false '' $true 'Keep view distance at 2 or more: lower makes faces and models look blocky.'
+    New-UeGame 'projectwingman' 'Project Wingman' 'ProjectWingman' '' '895870' $false '' $true 'Missile trails (effects) are the biggest cost in VR.'
+    New-UeGame 'metroawakening' 'Metro Awakening' 'Impact' '' '2669410' $true '' $true ''
+    New-UeGame 'behemoth' 'Skydance''s Behemoth' 'BHM' '' '1707990' $true '' $true 'If the game says no headset was found, set FullscreenMode to 0 in this file.'
+    New-UeGame 'alienri' 'Alien: Rogue Incursion' 'Midnight' '' '' $true '' $true ''
+    New-UeGame 'moss' 'Moss' 'MossGame' '' '' $false '' $true ''
+    New-UeGame 'moss2' 'Moss: Book II' 'Moss2' '' '' $false '' $true ''
+    New-UeGame 'hellbladevr' 'Hellblade: Senua''s Sacrifice VR' 'HellbladeGame' '' '' $false 'Saved\Config_VR' $true 'The VR edition keeps its own settings, apart from the flat-screen game.'
+    New-UeGame 'robo' 'Robo Recall' 'RoboRecall' '' '' $false '' $true ''
+    New-UeGame 'zerocaliber' 'Zero Caliber VR' 'ZeroCaliber' '' '' $false '' $true ''
+    New-UeGame 'fnafhw' 'Five Nights at Freddy''s: Help Wanted' 'freddys' '' '' $false '' $true ''
+    New-UeGame 'riven' 'Riven' 'Riven' '' '' $true '' $true ''
+)
+foreach ($g in $PerfGames) { if ($g.Untested -and -not $g.Note) { $g | Add-Member -NotePropertyName Note -NotePropertyValue $UntestedNote -Force } elseif ($g.Untested) { $g.Note = $g.Note + ' ' + $UntestedNote } }
 
 # ---- This PC: graphics card, processor and memory, sorted into 4 levels so suggestions fit the hardware ----
 $PerfTierNames = @('Entry', 'Mid-range', 'High-end', 'Top-end')
@@ -434,6 +817,18 @@ function Get-PerfJsonItems($pg, [string]$text) {
     }
     return $out
 }
+# XML elements with attributes on one tag (<shadows size="2048" enabled="true" />): every attribute value with its position
+function Get-PerfXmlItems([string]$text) {
+    $out = New-Object System.Collections.Generic.List[object]
+    foreach ($el in [regex]::Matches($text, '<([A-Za-z_][\w\-\.]*)\s+([^<>]*?)/?>')) {
+        $g = $el.Groups[2]
+        foreach ($a in [regex]::Matches($g.Value, '([A-Za-z_][\w\-\.:]*)="([^"]*)"')) {
+            $vg = $a.Groups[2]
+            $out.Add([pscustomobject]@{ Key = $el.Groups[1].Value + '/' + $a.Groups[1].Value; Start = $g.Index + $vg.Index; Length = $vg.Length; Raw = $vg.Value; Parent = '' })
+        }
+    }
+    return $out
+}
 function ConvertFrom-JsonRaw([string]$raw) { if ($raw -match '^"(.*)"$') { return $Matches[1] }; return $raw }
 function ConvertTo-JsonRaw([string]$v, [string]$old) {
     if ($old -match '^".*"$') { return '"' + ($v -replace '\\', '\\' -replace '"', '\"') + '"' }
@@ -447,7 +842,8 @@ function Get-PerfFormatGuess([string]$path) {
     $t = ''; try { $t = (Read-TextKeep $path).Text } catch { return $null }
     if ($ext -eq '.json' -or $t.TrimStart().StartsWith('{') -and $t -match '"\s*:') { return 'json' }
     if ($ext -eq '.lua') { return 'lua' }
-    if ($ext -eq '.xml') { if ($t -match '<prop name="') { return 'xmlattr' } else { return 'xmltag' } }
+    if ($ext -eq '.xml') { if ($t -match '<(prop|Property) name="') { return 'xmlattr' } else { return 'xmltag' } }
+    if ($ext -eq '.blk') { return 'blk' }
     if ($t -match '(?m)^uset\s') { return 'scs' }
     if ($t -match '(?m)^\s*set\s+\S+\s+\S') { return 'bms' }
     if ($ext -eq '.opt' -or $t -match '(?m)^\{\w') { return 'msfs' }
@@ -455,7 +851,7 @@ function Get-PerfFormatGuess([string]$path) {
     if ($t -match '(?m)^\S+[ \t]+\S') { return 'msfs' }   # "key value" lines, as in X-Plane's .prf files
     return $null
 }
-$PerfFormatNames = @{ json = 'JSON'; lua = 'Lua table'; xmlattr = 'XML (attributes)'; xmltag = 'XML'; scs = 'SCS config'; bms = 'BMS config'; msfs = 'key value lines'; ini = 'INI (key = value)' }
+$PerfFormatNames = @{ json = 'JSON'; lua = 'Lua table'; xmlattr = 'XML (attributes)'; xmltag = 'XML'; scs = 'SCS config'; bms = 'BMS config'; msfs = 'key value lines'; ini = 'INI (key = value)'; blk = 'BLK config'; xmlelem = 'XML (element attributes)' }
 
 # Games added by hand: stored in performance.json under "custom"
 function Get-CustomPerfGames {
@@ -478,10 +874,11 @@ $script:PerfPathCache = @{}
 function Get-PerfConfigPath($pg) {
     if ($script:PerfPathCache.ContainsKey($pg.Id) -and $script:PerfPathCache[$pg.Id] -and (Test-Path -LiteralPath $script:PerfPathCache[$pg.Id])) { return $script:PerfPathCache[$pg.Id] }
     $found = $null
-    foreach ($c in $pg.Configs) {
+    if ($pg.UeFolder) { $found = Get-UeConfig $pg.UeFolder $pg.UeSaved }
+    if (-not $found) { foreach ($c in $pg.Configs) {
         $cand = if ($c -is [scriptblock]) { & $c } else { $c }
         if ($cand -and (Test-Path -LiteralPath $cand)) { $found = [string]$cand; break }
-    }
+    } }
     if ($found) { $script:PerfPathCache[$pg.Id] = $found }
     return $found
 }
@@ -544,6 +941,8 @@ function Write-TextKeep([string]$path, $doc, [string]$text) { [IO.File]::WriteAl
 #   xmlattr  <prop name="Key" key="value" />          (Automobilista 2)
 #   xmltag   <key type="...">value</key>              (RaceRoom)
 #   bms      set g_key value // comment               (Falcon BMS)
+#   blk      graphics{ shadowQuality:t="high" }       (War Thunder)
+#   xmlelem  <shadows size="2048" enabled="true" />   (F1, DiRT Rally 2.0; key = element/attribute, read by position like JSON)
 # Keys are Section/Key paths where the format has sections.
 function Split-PerfLines($pg, [string]$text) {
     $stack = New-Object System.Collections.Generic.List[string]
@@ -570,8 +969,14 @@ function Split-PerfLines($pg, [string]$text) {
                 $m = [regex]::Match($line, '^(\s*\["([^"]+)"\]\s*=\s*)(.*?)(,?\s*)$')
                 if ($m.Success) { $key = (@($stack) + $m.Groups[2].Value) -join '/'; $pre = $m.Groups[1].Value; $val = $m.Groups[3].Value; $post = $m.Groups[4].Value }
             }
-            'xmlattr' { $m = [regex]::Match($line, '^(\s*<prop name="([^"]+)" (?!type=)[A-Za-z_]+=")([^"]*)(".*)$'); if ($m.Success) { $key = $m.Groups[2].Value; $pre = $m.Groups[1].Value; $val = $m.Groups[3].Value; $post = $m.Groups[4].Value } }
-            'xmltag' { $m = [regex]::Match($line, '^(\s*<([A-Za-z_][\w]*) type="[^"]*">)([^<]*)(</\2>.*)$'); if ($m.Success) { $key = $m.Groups[2].Value; $pre = $m.Groups[1].Value; $val = $m.Groups[3].Value; $post = $m.Groups[4].Value } }
+            'xmlattr' { $m = [regex]::Match($line, '^(\s*<(?:prop|Property) name="([^"]+)" (?!type=)[A-Za-z_]+=")([^"]*)(".*)$'); if ($m.Success) { $key = $m.Groups[2].Value; $pre = $m.Groups[1].Value; $val = $m.Groups[3].Value; $post = $m.Groups[4].Value } }
+            'xmltag' { $m = [regex]::Match($line, '^(\s*<([A-Za-z_][\w]*)(?: type="[^"]*")?>)([^<]*)(</\2>.*)$'); if ($m.Success) { $key = $m.Groups[2].Value; $pre = $m.Groups[1].Value; $val = $m.Groups[3].Value; $post = $m.Groups[4].Value } }
+            'blk' {
+                if ($t -match '^([\w\-\.]+)\s*\{\s*$') { $stack.Add($Matches[1]); continue }
+                if ($t -eq '}') { if ($stack.Count) { $stack.RemoveAt($stack.Count - 1) }; continue }
+                $m = [regex]::Match($line, '^(\s*([\w\-\.]+):\w+=)(.*?)(\s*)$')
+                if ($m.Success) { $key = (@($stack) + $m.Groups[2].Value) -join '/'; $pre = $m.Groups[1].Value; $val = $m.Groups[3].Value; $post = $m.Groups[4].Value }
+            }
             'bms' { $m = [regex]::Match($line, '^(\s*set\s+)(\S+)(\s+)(\S+)(.*)$'); if ($m.Success) { $key = $m.Groups[2].Value; $pre = $m.Groups[1].Value + $key + $m.Groups[3].Value; $val = $m.Groups[4].Value; $post = $m.Groups[5].Value } }
         }
         if ($key) { $out.Add([pscustomobject]@{ Index = $i; Key = $key; Pre = $pre; Val = $val; Post = $post }) }
@@ -580,9 +985,9 @@ function Split-PerfLines($pg, [string]$text) {
 }
 
 # DCS writes text values in quotes; they are shown and stored without them
-function ConvertFrom-PerfRaw($pg, [string]$v) { if ($pg.Format -eq 'lua' -and $v -match '^"(.*)"$') { return $Matches[1] }; return $v }
+function ConvertFrom-PerfRaw($pg, [string]$v) { if ($pg.Format -in 'lua', 'blk' -and $v -match '^"(.*)"$') { return $Matches[1] }; return $v }
 function ConvertTo-PerfRaw($pg, [string]$v, [string]$old) {
-    if ($pg.Format -eq 'lua' -and $old -match '^".*"$' -and $v -notmatch '^".*"$') { return '"' + $v + '"' }
+    if ($pg.Format -in 'lua', 'blk' -and $old -match '^".*"$' -and $v -notmatch '^".*"$') { return '"' + $v + '"' }
     return $v
 }
 
@@ -590,6 +995,10 @@ function ConvertTo-PerfRaw($pg, [string]$v, [string]$old) {
 function Read-PerfValues($pg, [string]$path) {
     $vals = @{}
     $files = @(); if ($pg.BaseConfig -and (Test-Path -LiteralPath (& $pg.BaseConfig $path))) { $files += (& $pg.BaseConfig $path) }; $files += $path
+    if ($pg.Format -eq 'xmlelem') {
+        foreach ($it in (Get-PerfXmlItems (Read-TextKeep $path).Text)) { if (-not $vals.ContainsKey($it.Key)) { $vals[$it.Key] = $it.Raw } }
+        return $vals
+    }
     if ($pg.Format -eq 'json') {
         $rank = @{}
         foreach ($it in (Get-PerfJsonItems $pg (Read-TextKeep $path).Text)) {
@@ -609,12 +1018,13 @@ function Read-PerfValues($pg, [string]$path) {
 # Formats where a missing line is fine to add (the game reads it like any other) get it appended.
 function Set-PerfValues($pg, [string]$path, $want, [switch]$WhatIf) {
     $doc = Read-TextKeep $path
-    if ($pg.Format -eq 'json') {
+    if ($pg.Format -in 'json', 'xmlelem') {
+        $xml = ($pg.Format -eq 'xmlelem')
         $text = $doc.Text; $changes = New-Object System.Collections.Generic.List[string]; $edits = @()
-        foreach ($it in (Get-PerfJsonItems $pg $text)) {
+        foreach ($it in $(if ($xml) { Get-PerfXmlItems $text } else { Get-PerfJsonItems $pg $text })) {
             if (-not $want.Contains($it.Key)) { continue }
-            $old = ConvertFrom-JsonRaw $it.Raw; $v = [string]$want[$it.Key]
-            if ($old -ne $v) { $edits += [pscustomobject]@{ Start = $it.Start; Length = $it.Length; New = (ConvertTo-JsonRaw $v $it.Raw) }; if (-not ($changes | Where-Object { $_ -like "$($it.Key) *" })) { $changes.Add("$($it.Key) $old->$v") } }
+            $old = if ($xml) { $it.Raw } else { ConvertFrom-JsonRaw $it.Raw }; $v = [string]$want[$it.Key]
+            if ($old -ne $v) { $edits += [pscustomobject]@{ Start = $it.Start; Length = $it.Length; New = $(if ($xml) { $v -replace '&', '&amp;' -replace '<', '&lt;' } else { ConvertTo-JsonRaw $v $it.Raw }) }; if (-not ($changes | Where-Object { $_ -like "$($it.Key) *" })) { $changes.Add("$($it.Key) $old->$v") } }
         }
         foreach ($e in ($edits | Sort-Object Start -Descending)) { $text = $text.Substring(0, $e.Start) + $e.New + $text.Substring($e.Start + $e.Length) }
         if ($changes.Count -and -not $WhatIf) {
@@ -645,6 +1055,23 @@ function Set-PerfValues($pg, [string]$path, $want, [switch]$WhatIf) {
             $line = if ($pg.Format -eq 'scs') { "uset $k `"$($want[$k])`"" } else { "set $k $($want[$k])" }
             $changes.Add("$k (added) $($want[$k])"); $text = $text.TrimEnd("`r", "`n") + $doc.Nl + $line + $doc.Nl
         }
+    }
+    # Unreal Engine games and Star Citizen: a missing setting is added to its [Section] (or the end of the file)
+    if ($pg.AddMissing -and $pg.Format -eq 'ini') {
+        $ls = New-Object System.Collections.Generic.List[string]; $ls.AddRange([string[]]($text -split "`r?`n"))
+        $sep = if ($text -match '(?m)^[^=\[;#\r\n]+ = ') { ' = ' } else { '=' }
+        foreach ($k in @($want.Keys)) {
+            if ($seen.ContainsKey($k)) { continue }
+            $cut = $k.LastIndexOf('/'); $sec = if ($cut -gt 0) { $k.Substring(0, $cut) } else { $null }; $line = $k.Substring($cut + 1) + $sep + $want[$k]
+            $end = $ls.Count; while ($end -gt 0 -and $ls[$end - 1].Trim() -eq '') { $end-- }
+            if ($sec) {
+                $h = -1; for ($j = 0; $j -lt $ls.Count; $j++) { if ($ls[$j].Trim() -ieq "[$sec]") { $h = $j; break } }
+                if ($h -lt 0) { $ls.Insert($end, $line); $ls.Insert($end, "[$sec]") }
+                else { $j = $h + 1; while ($j -lt $ls.Count -and $ls[$j].Trim() -notmatch '^\[') { $j++ }; while ($j -gt $h + 1 -and $ls[$j - 1].Trim() -eq '') { $j-- }; $ls.Insert($j, $line) }
+            } else { $ls.Insert($end, $line) }
+            $changes.Add("$k (added) $($want[$k])")
+        }
+        $text = $ls -join $doc.Nl
     }
     if ($changes.Count -and -not $WhatIf) {
         $dir = Join-Path $PerfBackupDir $pg.Id
@@ -733,6 +1160,7 @@ $PerfPinAdvice = @{
     skyrimvr = @('yes', 'Skyrim''s engine leans on one main thread, and heavy mod lists make it worse, so this helps.')
 }
 function Get-PinAdvice($pg) {
+    if ($pg.Pin) { return $pg.Pin }
     if ($PerfPinAdvice.ContainsKey($pg.Id)) { return $PerfPinAdvice[$pg.Id] }
     return @('try', 'Older games that use one main thread usually gain; newer engines that use many threads usually don''t. Test the game both ways.')
 }
@@ -3265,7 +3693,8 @@ function Show-Performance([string]$startId) {
         $running = (Get-PerfProcesses $pg).Count -gt 0
         $script:pfTitle.Text = $pg.Name
         $script:pfInfo.Text = $(if ($path) { "Settings file: $path" + $(if ($running) { "`nThe game is running now - changes to its file are made after it closes." } else { '' }) }
-                                else { "Not installed on this PC, so there's nothing to set up here. (No settings file in:`n" + (($pg.Configs | ForEach-Object { if ($_ -is [scriptblock]) { 'the game''s install folder' } else { $_ } }) -join "`n") + ")`nIf it is installed, start it once so it creates the file." }) 
+                                else { "Not installed on this PC, so there's nothing to set up here. (No settings file in:`n" + (($pg.Configs | ForEach-Object { if ($_ -is [scriptblock]) { 'the game''s install folder' } else { $_ } }) -join "`n") + ")`nIf it is installed, start it once so it creates the file." })
+        if ($pg.Note) { $script:pfInfo.Text += "`n" + $pg.Note } 
         $script:pfLoading = $true
         $script:pfPin.IsChecked = [bool]$e.pinCores; $script:pfKeep.IsChecked = [bool]$e.keepWindow; $script:pfLock.IsChecked = [bool]$e.lock
         $script:pfPin.IsEnabled = [bool]$script:pfMask
@@ -3297,12 +3726,12 @@ function Show-Performance([string]$startId) {
             $locked = $e.values.Contains($def.Key)
             $tb.Text = $(if ($locked) { [string]$e.values[$def.Key] } elseif ($has) { [string]$cur[$def.Key] } else { '' })
             $hint = New-Object Windows.Controls.TextBlock; $hint.VerticalAlignment = 'Center'; $hint.Margin = '12,0,0,0'; $hint.TextTrimming = 'CharacterEllipsis'
-            $hint.Text = $(if ($has) { "In the game now: $($cur[$def.Key])" } elseif ($path) { 'Not in the file' } else { '' })
+            $hint.Text = $(if ($has) { "In the game now: $($cur[$def.Key])" } elseif ($path -and $pg.AddMissing) { 'Not in the file yet (added if you lock it)' } elseif ($path) { 'Not in the file' } else { '' })
             $hint.Foreground = $(if ($locked -and $has -and [string]$cur[$def.Key] -ne [string]$e.values[$def.Key]) { '#FB923C' } else { '#7A8397' })
             $tl = & $script:pfTiers; $rv = Get-PerfRec $def $tl[0] $tl[1]
             if ($null -ne $rv) { $hint.ToolTip = "VR starting point for the level picked below: $rv" }
             $cb.IsChecked = $locked; $tb.IsEnabled = $locked
-            $cb.IsEnabled = [bool]$path -and ($has -or $pg.Format -eq 'scs')
+            $cb.IsEnabled = [bool]$path -and ($has -or $pg.Format -eq 'scs' -or $pg.AddMissing)
             $cb.Add_Click({ $this.Tag.Box.IsEnabled = [bool]$this.IsChecked; if (-not $script:pfLoading) { $script:pfDirty = $true } })
             $tb.Add_TextChanged({ if (-not $script:pfLoading) { $script:pfDirty = $true } })
             $row.Check = $cb; $row.Box = $tb; $row | Add-Member -NotePropertyName Els -NotePropertyValue @($cb, $lbl, $tb, $hint) -Force
@@ -4536,6 +4965,9 @@ if ($Test) {
         $acw = Show-AddCustomGame; Save-Shot $acw 'add-custom'; $acw.Close()
         $pfw = Show-Performance 'acc'; Save-Shot $pfw 'performance-acc'; $pfw.Close()
         $pfw = Show-Performance 'msfs2024'; Save-Shot $pfw 'performance-msfs'; $pfw.Close()
+        $pfw = Show-Performance 'pavlov'; Save-Shot $pfw 'performance-pavlov'; $pfw.Close()
+        $pfw = Show-Performance 'nms'; Save-Shot $pfw 'performance-nms'; $pfw.Close()
+        $pfw = Show-Performance 'bns'; Save-Shot $pfw 'performance-bns'; $pfw.Close()
         $bw = Show-Backups $null $null; Save-Shot $bw 'backups'; $bw.Close()
         if ($pick) { $script:FinderTerm = 'Crysis'; $fw = Show-Finder $pick.Tag; Save-Shot $fw 'finder'; $fw.Close() }
         $aw = Show-AddGames
