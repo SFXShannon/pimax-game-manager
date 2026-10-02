@@ -44,6 +44,7 @@ Adding games, editing or removing them, and changing images don't restart Pimax 
 
 Pick a game and click **Play** (top right), or double-click it in the library list.
 
+- If Pimax Play isn't open, it's opened first (starting its service if needed), and the game starts once Pimax Play and its headset runtime are up. The status line shows what it's waiting for; if Pimax Play doesn't open within a minute, the game isn't started.
 - It starts the game the same way Pimax Play does, using the launch path in Pimax's own entry: Steam games through Steam (for example `steam://launch/620980/VR`), and imported and Oculus games from their .exe or shortcut.
 - The game runs as you, not as admin, even though the app itself runs as admin. An .exe is started in its own folder, as it would be from Pimax Play.
 - If the game's .exe has moved, the status line says so. For imported games, point the entry at the new location with **Edit / remove...**.
@@ -243,13 +244,13 @@ Add `-Guard` to run only the Performance Guard.
 
 ```powershell
 Install-Module ps2exe -Scope CurrentUser
-Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.9.3
+Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.9.4
 ```
 
 To build the installer too, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
-& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.9.3 .\PimaxGameManager.iss
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.9.4 .\PimaxGameManager.iss
 ```
 
 The app icon and `assets/logo.png` are generated from the logo shapes used in the app:

@@ -37,7 +37,7 @@ try {
     if ((Test-Path $legacyCfg) -and -not (Test-Path $newCfg)) { Copy-Item $legacyCfg $newCfg }
 } catch { }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
-$AppVersion = '1.9.3'
+$AppVersion = '1.9.4'
 $RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-game-manager/releases/latest'
 
 # ---------- Performance: lock game settings, performance cores, window fix, background guard ----------
@@ -3364,9 +3364,43 @@ $ui.EditBtn.Add_Click({
 $ui.EditBtn.IsEnabled = $false
 
 # ---------- Play ----------
+# Play makes sure Pimax Play is open first (and its service running), so the game finds the headset.
+# Waiting is done on a timer so the window stays responsive: Pimax Play's window, then its runtime (pi_server).
 function Invoke-PlaySelected {
     $g = Selected-Game
     if (-not $g) { Set-Status 'Pick a game on the left first.' $true; return }
+    if ($script:PlayWait) { Set-Status "Still waiting for Pimax Play to open for $($script:PlayGame.Name)..."; return }
+    if (-not (Get-LaunchTarget $g)) { Set-Status "Couldn't start $($g.Name): Pimax Play has no launch path for this game." $true; return }
+    if (Get-Process PimaxClient -ErrorAction SilentlyContinue) { Invoke-StartGameNow $g; return }
+    try {
+        $svc = Get-Service $ServiceName -ErrorAction SilentlyContinue
+        if ($svc -and $svc.Status -ne 'Running') { Start-Service $ServiceName -ErrorAction Stop }
+        $client = Get-ClientPath
+        if (-not (Test-Path -LiteralPath $client)) { throw "Pimax Play wasn't found at $client." }
+        Start-Process $client
+    } catch { Set-Status "Couldn't open Pimax Play: $($_.Exception.Message)" $true; return }
+    $script:PlayGame = $g; $script:PlayStarted = Get-Date; $script:PlayClientUp = $null
+    $ui.PlayBtn.IsEnabled = $false
+    Set-Status "Opening Pimax Play first - $($g.Name) starts as soon as it's ready..."
+    $script:PlayWait = New-Object Windows.Threading.DispatcherTimer
+    $script:PlayWait.Interval = [TimeSpan]::FromMilliseconds(700)
+    $script:PlayWait.Add_Tick({
+        $secs = ((Get-Date) - $script:PlayStarted).TotalSeconds
+        $client = [bool](Get-Process PimaxClient -ErrorAction SilentlyContinue)
+        if ($client -and -not $script:PlayClientUp) { $script:PlayClientUp = Get-Date }
+        $runtime = [bool](Get-Process pi_server -ErrorAction SilentlyContinue)
+        $ready = $client -and (($runtime -and ((Get-Date) - $script:PlayClientUp).TotalSeconds -ge 3) -or ((Get-Date) - $script:PlayClientUp).TotalSeconds -ge 20)
+        if ($ready) {
+            $script:PlayWait.Stop(); $script:PlayWait = $null; $ui.PlayBtn.IsEnabled = [bool](Selected-Game)
+            Invoke-StartGameNow $script:PlayGame
+        } elseif ($secs -ge 60) {
+            $script:PlayWait.Stop(); $script:PlayWait = $null; $ui.PlayBtn.IsEnabled = [bool](Selected-Game)
+            Set-Status "Pimax Play didn't open within a minute, so $($script:PlayGame.Name) wasn't started. Open Pimax Play, then click Play again." $true
+        } elseif ($client) { Set-Status "Pimax Play is open - waiting for the headset runtime before starting $($script:PlayGame.Name)..." }
+    })
+    $script:PlayWait.Start()
+}
+function Invoke-StartGameNow($g) {
     try { Start-Game $g; Set-Status "Starting $($g.Name)..." }
     catch { Set-Status "Couldn't start $($g.Name): $($_.Exception.Message)" $true }
 }
@@ -3511,7 +3545,7 @@ $TutorialSteps = @(
     @{ Icon = 'Logo'; Title = 'Welcome to Pimax Game Manager'
        Body = "Keep your Pimax Play library the way you want it: add and start games, your own tile images, your own order, graphics settings for many games at once, and backups that a Pimax update can't wipe.`n`nThis quick tour takes about a minute." },
     @{ Icon = 'IcoPlay'; Title = 'Play games'; Since = '1.8.0'
-       Body = "Pick a game on the left and click Play at the top right, or just double-click it in the list.`n`nGames start the same way Pimax Play starts them: Steam games through Steam, imported and Oculus games from their own .exe. Which runtime a game uses (Pimax OpenXR or SteamVR) is still set in Pimax Play." },
+       Body = "Pick a game on the left and click Play at the top right, or just double-click it in the list. If Pimax Play isn't open, it's opened first and the game starts once it's ready.`n`nGames start the same way Pimax Play starts them: Steam games through Steam, imported and Oculus games from their own .exe. Which runtime a game uses (Pimax OpenXR or SteamVR) is still set in Pimax Play." },
     @{ Icon = 'IcoImage'; Title = 'Custom library images'
        Body = "Pick an imported game on the left, then click Find image to search Steam and SteamGridDB, paste an image link, or Browse for a file. Click Use image to use it.`n`nSteam and Oculus games get their image from the store every time Pimax starts. To give one your own image, add its .exe with Add games." },
     @{ Icon = 'IcoPlus'; Title = 'Add games'
