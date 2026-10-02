@@ -155,7 +155,7 @@ Games that aren't installed show as *not found*. Skyrim VR isn't included: mod m
 For each game:
 
 - **Lock the settings ticked below**: tick **Lock** on a setting and give it a value. While the game is closed, any locked setting that changed is put back. The game's file is backed up to `%APPDATA%\PimaxGameManager\backups\performance` first (the last 20 copies per game are kept). Changes are never made while the game is running, because these games rewrite their file when they quit.
-- **Recommended for VR** fills in a starting point for VR: frame pacing left to the headset, and the heaviest CPU and GPU settings (mirrors, traffic, level of detail, shadows, reflections) turned down a step. Settings without a suggestion are left alone. Hover a setting to see what it does.
+- **Recommended for VR** fills in a starting point for VR, sized for your PC: the app reads your graphics card, processor and memory (shown above the buttons) and sorts each into Entry, Mid-range, High-end or Top-end. Graphics settings follow the graphics card and world-detail settings follow the processor, so a strong GPU with an older CPU gets sharp graphics with a lighter world. Pick another level in **Suggestions sized for** to override it. Frame pacing is always left to the headset, and blur effects stay off. Settings without a suggestion are left alone; hover a setting to see what it does.
 - **Use current** copies what the game has now into the ticked settings, so you can tune in the game and then lock it.
 - **Restore original...** puts the game's file back the way it was before the app first changed it (a copy is kept the first time), and turns locking off so you can compare. Your locked values are kept: click **Save & apply now** to switch back (locking turns back on).
 - **Run the game on the performance cores only**: on CPUs with performance and efficiency cores (Intel 12th gen and later), the game is kept on the performance cores and given a slightly higher priority, so its main thread never lands on a slower core. Driving and flight sims are often limited by one CPU thread, so this can remove stutters. Hidden on CPUs where all cores are the same.
@@ -244,13 +244,13 @@ Add `-Guard` to run only the Performance Guard.
 
 ```powershell
 Install-Module ps2exe -Scope CurrentUser
-Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.9.4
+Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.10.0
 ```
 
 To build the installer too, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
-& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.9.4 .\PimaxGameManager.iss
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.10.0 .\PimaxGameManager.iss
 ```
 
 The app icon and `assets/logo.png` are generated from the logo shapes used in the app:

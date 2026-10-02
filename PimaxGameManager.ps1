@@ -37,7 +37,7 @@ try {
     if ((Test-Path $legacyCfg) -and -not (Test-Path $newCfg)) { Copy-Item $legacyCfg $newCfg }
 } catch { }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
-$AppVersion = '1.9.4'
+$AppVersion = '1.10.0'
 $RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-game-manager/releases/latest'
 
 # ---------- Performance: lock game settings, performance cores, window fix, background guard ----------
@@ -59,25 +59,25 @@ function New-PerfSetting([string]$key, [string]$label, [string]$group, $rec, [st
 
 # Settings shown for the SCS engine games (American Truck Simulator, Euro Truck Simulator 2): config.cfg, lines like  uset r_ssao "2"
 $ScsSettings = @(
-    New-PerfSetting 'r_scale_x' 'Scaling (width)' 'Resolution & timing' '1' 'In-game resolution scaling. In VR it multiplies the headset resolution, so 1 = exactly what the headset asks for.'
-    New-PerfSetting 'r_scale_y' 'Scaling (height)' 'Resolution & timing' '1' 'Should match the width. A different value stretches the render and costs GPU time.'
+    New-PerfSetting 'r_scale_x' 'Scaling (width)' 'Resolution & timing' @('0.8', '0.9', '1', '1') 'In-game resolution scaling. In VR it multiplies the headset resolution, so 1 = exactly what the headset asks for.'
+    New-PerfSetting 'r_scale_y' 'Scaling (height)' 'Resolution & timing' @('0.8', '0.9', '1', '1') 'Should match the width. A different value stretches the render and costs GPU time.'
     New-PerfSetting 't_ignore_hmd_timing' 'Ignore headset timing (1 = yes)' 'Resolution & timing' '0' '0 lets the headset pace the frames, which avoids judder in VR.'
     New-PerfSetting 't_limit_fps' 'Frame rate limit (0 = off)' 'Resolution & timing' '0' 'In VR the headset sets the frame rate, so the game''s own limiter is best off.'
     New-PerfSetting 't_limit_fps_inactive' 'Frame rate limit when not focused (0 = off)' 'Resolution & timing' '0' 'The game drops to this frame rate when its desktop window is not the active window.'
-    New-PerfSetting 'r_ssao' 'Ambient occlusion (0-2)' 'Graphics (GPU)' '1' 'SSAO. 1 is much cheaper than 2 and hard to tell apart in VR.'
-    New-PerfSetting 'r_sun_shadow_texture_size' 'Sun shadow size' 'Graphics (GPU)' '2048' '4096, 2048 or 1024.'
-    New-PerfSetting 'r_cloud_shadows' 'Cloud shadows (1 = on)' 'Graphics (GPU)' '0' ''
-    New-PerfSetting 'r_far_shadow_disable' 'Far shadows off (1 = off)' 'Graphics (GPU)' '1' 'Also saves CPU time.'
-    New-PerfSetting 'g_reflection' 'Reflections (1 = on)' 'Graphics (GPU)' '0' ''
-    New-PerfSetting 'g_rain_reflection' 'Rain reflections (1 = on)' 'Graphics (GPU)' '0' 'Only costs anything in rain, but then it causes frame drops.'
-    New-PerfSetting 'r_anisotropy_factor' 'Texture filtering (0-1)' 'Graphics (GPU)' '1' 'Sharper roads in the distance for almost no cost.'
-    New-PerfSetting 'r_mirror_view_distance' 'Mirror view distance' 'World detail (CPU)' '150' 'Every mirror draws the world again on the main thread - the biggest CPU cost in cities.'
-    New-PerfSetting 'g_traffic' 'Traffic density' 'World detail (CPU)' '0.5' ''
-    New-PerfSetting 'g_lod_factor_traffic' 'Traffic detail distance' 'World detail (CPU)' '0.5' ''
-    New-PerfSetting 'g_lod_factor_parked' 'Parked car detail distance' 'World detail (CPU)' '0.5' ''
-    New-PerfSetting 'g_lod_factor_pedestrian' 'Pedestrian detail distance' 'World detail (CPU)' '0.5' ''
-    New-PerfSetting 'g_grass_density' 'Grass density (0-2)' 'World detail (CPU)' '1' ''
-    New-PerfSetting 'g_veg_detail' 'Vegetation detail (0-2)' 'World detail (CPU)' '1' ''
+    New-PerfSetting 'r_ssao' 'Ambient occlusion (0-2)' 'Graphics (GPU)' @('0', '1', '1', '2') 'SSAO. 1 is much cheaper than 2 and hard to tell apart in VR.'
+    New-PerfSetting 'r_sun_shadow_texture_size' 'Sun shadow size' 'Graphics (GPU)' @('1024', '2048', '2048', '4096') '4096, 2048 or 1024.'
+    New-PerfSetting 'r_cloud_shadows' 'Cloud shadows (1 = on)' 'Graphics (GPU)' @('0', '0', '1', '1') ''
+    New-PerfSetting 'r_far_shadow_disable' 'Far shadows off (1 = off)' 'Graphics (GPU)' @('1', '1', '1', '1') 'Also saves CPU time.'
+    New-PerfSetting 'g_reflection' 'Reflections (1 = on)' 'Graphics (GPU)' @('0', '0', '1', '1') ''
+    New-PerfSetting 'g_rain_reflection' 'Rain reflections (1 = on)' 'Graphics (GPU)' @('0', '0', '0', '1') 'Only costs anything in rain, but then it causes frame drops.'
+    New-PerfSetting 'r_anisotropy_factor' 'Texture filtering (0-1)' 'Graphics (GPU)' @('0.5', '1', '1', '1') 'Sharper roads in the distance for almost no cost.'
+    New-PerfSetting 'r_mirror_view_distance' 'Mirror view distance' 'World detail (CPU)' @('100', '100', '150', '150') 'Every mirror draws the world again on the main thread - the biggest CPU cost in cities.'
+    New-PerfSetting 'g_traffic' 'Traffic density' 'World detail (CPU)' @('0.3', '0.4', '0.5', '0.5') ''
+    New-PerfSetting 'g_lod_factor_traffic' 'Traffic detail distance' 'World detail (CPU)' @('0.4', '0.4', '0.5', '0.5') ''
+    New-PerfSetting 'g_lod_factor_parked' 'Parked car detail distance' 'World detail (CPU)' @('0.4', '0.4', '0.5', '0.5') ''
+    New-PerfSetting 'g_lod_factor_pedestrian' 'Pedestrian detail distance' 'World detail (CPU)' @('0.4', '0.4', '0.5', '0.5') ''
+    New-PerfSetting 'g_grass_density' 'Grass density (0-2)' 'World detail (CPU)' @('0', '1', '1', '1') ''
+    New-PerfSetting 'g_veg_detail' 'Vegetation detail (0-2)' 'World detail (CPU)' @('0', '1', '1', '1') ''
     New-PerfSetting 'r_mode_width' 'Desktop window width' 'Desktop window' '960' 'The mirror window on your monitor. Smaller is cheaper and easier to keep on screen.'
     New-PerfSetting 'r_mode_height' 'Desktop window height' 'Desktop window' '540' ''
 )
@@ -89,23 +89,23 @@ $MsfsSettings = @(
     New-PerfSetting 'Video/AntiAliasingVR' 'Anti-aliasing (VR)' 'Resolution & timing' $null 'DLSS, TAA, FSR...'
     New-PerfSetting 'Video/DLSSModeVR' 'DLSS mode (VR)' 'Resolution & timing' $null 'QUALITY, BALANCED, PERFORMANCE, AUTO...'
     New-PerfSetting 'Video/DynamicSettingsVR' 'Dynamic settings (VR, 1 = on)' 'Resolution & timing' '0' 'When on, the sim changes settings on its own, which fights a locked setup.'
-    New-PerfSetting 'GraphicsVR/Shadows/Size' 'Shadow map size' 'Graphics (GPU)' $null '768, 1024, 1536, 2048...'
-    New-PerfSetting 'GraphicsVR/VolumetricClouds/Quality' 'Volumetric clouds (0-3)' 'Graphics (GPU)' '2' ''
-    New-PerfSetting 'GraphicsVR/SSR/Enabled' 'Screen space reflections (1 = on)' 'Graphics (GPU)' '0' ''
-    New-PerfSetting 'GraphicsVR/SSAO/Quality' 'Ambient occlusion (0-3)' 'Graphics (GPU)' '1' ''
-    New-PerfSetting 'GraphicsVR/Terrain/LoDFactor' 'Terrain level of detail' 'World detail (CPU)' '1.0' 'The biggest CPU setting in the sim. 1.0 is about "Medium/High".'
-    New-PerfSetting 'GraphicsVR/ObjectsLoD/LoDFactor' 'Objects level of detail' 'World detail (CPU)' '1.0' ''
-    New-PerfSetting 'GraphicsVR/Buildings/Quality' 'Buildings (0-3)' 'World detail (CPU)' '2' ''
-    New-PerfSetting 'GraphicsVR/Procedural/TreesQuality' 'Trees (0-3)' 'World detail (CPU)' '2' ''
-    New-PerfSetting 'GraphicsVR/Procedural/GrassQuality' 'Grass and bushes (0-3)' 'World detail (CPU)' '2' ''
-    New-PerfSetting 'GraphicsVR/Characters/Quantity' 'People (0-3)' 'World detail (CPU)' '1' ''
-    New-PerfSetting 'GraphicsVR/Fauna/Quantity' 'Animals (0-3)' 'World detail (CPU)' '1' ''
-    New-PerfSetting 'GraphicsVR/Traffic/AircraftTrafficQuantity' 'Air traffic (0-3)' 'World detail (CPU)' '1' ''
-    New-PerfSetting 'GraphicsVR/Traffic/ParkedAircraftQuantity' 'Parked aircraft (0-3)' 'World detail (CPU)' '1' ''
-    New-PerfSetting 'GraphicsVR/Traffic/AirportsServicesQuantity' 'Airport vehicles (0-3)' 'World detail (CPU)' '1' ''
-    New-PerfSetting 'GraphicsVR/Traffic/RoadQuality' 'Road traffic (0-3)' 'World detail (CPU)' '1' ''
-    New-PerfSetting 'GraphicsVR/Traffic/SeaQuality' 'Boats (0-3)' 'World detail (CPU)' '1' ''
-    New-PerfSetting 'GraphicsVR/GlassCockpitsRefreshRate/Quality' 'Glass cockpit refresh rate (0-2)' 'World detail (CPU)' '1' 'Cockpit screens redraw on the main thread.'
+    New-PerfSetting 'GraphicsVR/Shadows/Size' 'Shadow map size' 'Graphics (GPU)' @('768', '1024', '1024', '1536') '768, 1024, 1536, 2048...'
+    New-PerfSetting 'GraphicsVR/VolumetricClouds/Quality' 'Volumetric clouds (0-3)' 'Graphics (GPU)' @('1', '1', '2', '2') ''
+    New-PerfSetting 'GraphicsVR/SSR/Enabled' 'Screen space reflections (1 = on)' 'Graphics (GPU)' @('0', '0', '0', '1') ''
+    New-PerfSetting 'GraphicsVR/SSAO/Quality' 'Ambient occlusion (0-3)' 'Graphics (GPU)' @('0', '1', '1', '2') ''
+    New-PerfSetting 'GraphicsVR/Terrain/LoDFactor' 'Terrain level of detail' 'World detail (CPU)' @('0.75', '1.0', '1.0', '1.25') 'The biggest CPU setting in the sim. 1.0 is about "Medium/High".'
+    New-PerfSetting 'GraphicsVR/ObjectsLoD/LoDFactor' 'Objects level of detail' 'World detail (CPU)' @('0.75', '1.0', '1.0', '1.25') ''
+    New-PerfSetting 'GraphicsVR/Buildings/Quality' 'Buildings (0-3)' 'World detail (CPU)' @('1', '2', '2', '3') ''
+    New-PerfSetting 'GraphicsVR/Procedural/TreesQuality' 'Trees (0-3)' 'World detail (CPU)' @('1', '2', '2', '3') ''
+    New-PerfSetting 'GraphicsVR/Procedural/GrassQuality' 'Grass and bushes (0-3)' 'World detail (CPU)' @('1', '2', '2', '2') ''
+    New-PerfSetting 'GraphicsVR/Characters/Quantity' 'People (0-3)' 'World detail (CPU)' @('0', '1', '1', '2') ''
+    New-PerfSetting 'GraphicsVR/Fauna/Quantity' 'Animals (0-3)' 'World detail (CPU)' @('0', '1', '1', '2') ''
+    New-PerfSetting 'GraphicsVR/Traffic/AircraftTrafficQuantity' 'Air traffic (0-3)' 'World detail (CPU)' @('0', '1', '1', '2') ''
+    New-PerfSetting 'GraphicsVR/Traffic/ParkedAircraftQuantity' 'Parked aircraft (0-3)' 'World detail (CPU)' @('1', '1', '2', '2') ''
+    New-PerfSetting 'GraphicsVR/Traffic/AirportsServicesQuantity' 'Airport vehicles (0-3)' 'World detail (CPU)' @('0', '1', '1', '2') ''
+    New-PerfSetting 'GraphicsVR/Traffic/RoadQuality' 'Road traffic (0-3)' 'World detail (CPU)' @('0', '1', '1', '2') ''
+    New-PerfSetting 'GraphicsVR/Traffic/SeaQuality' 'Boats (0-3)' 'World detail (CPU)' @('0', '1', '1', '2') ''
+    New-PerfSetting 'GraphicsVR/GlassCockpitsRefreshRate/Quality' 'Glass cockpit refresh rate (0-2)' 'World detail (CPU)' @('0', '1', '1', '2') 'Cockpit screens redraw on the main thread.'
 )
 
 # iRacing: the VR renderer has its own file, rendererDX11OpenXR.ini
@@ -117,46 +117,46 @@ $IRacingSettings = @(
     New-PerfSetting 'Graphics Options/HeatHaze' 'Heat haze (1 = on)' 'Graphics (GPU)' '0' ''
     New-PerfSetting 'Graphics Options/DepthOfField' 'Depth of field (1 = on)' 'Graphics (GPU)' '0' ''
     New-PerfSetting 'Graphics Options/MotionBlurStrength' 'Motion blur (0-4)' 'Graphics (GPU)' '0' ''
-    New-PerfSetting 'Graphics Options/ShadowDetail' 'Shadow detail (0 = fewer)' 'Graphics (GPU)' '0' ''
-    New-PerfSetting 'Graphics Options/DynamicShadowRes' 'Car shadow resolution (0-4)' 'Graphics (GPU)' '1' ''
-    New-PerfSetting 'Graphics Options/ShaderQuality' 'Shader quality (0-3)' 'Graphics (GPU)' $null ''
+    New-PerfSetting 'Graphics Options/ShadowDetail' 'Shadow detail (0 = fewer)' 'Graphics (GPU)' @('0', '0', '0', '1') ''
+    New-PerfSetting 'Graphics Options/DynamicShadowRes' 'Car shadow resolution (0-4)' 'Graphics (GPU)' @('0', '1', '1', '2') ''
+    New-PerfSetting 'Graphics Options/ShaderQuality' 'Shader quality (0-3)' 'Graphics (GPU)' @('1', '2', '2', '3') ''
     New-PerfSetting 'Graphics Options/NumDynamicCubemaps' 'Dynamic reflections per frame' 'Graphics (GPU)' '0' 'Reflections on the car body. 0 is a big saving.'
-    New-PerfSetting 'Graphics Options/MaxCarsToDraw' 'Cars drawn (10-64)' 'World detail (CPU)' '20' 'The biggest CPU setting in iRacing.'
-    New-PerfSetting 'Graphics Options/MaxCarsToDrawInMirrors' 'Cars drawn in mirrors (4-64)' 'World detail (CPU)' '8' ''
+    New-PerfSetting 'Graphics Options/MaxCarsToDraw' 'Cars drawn (10-64)' 'World detail (CPU)' @('12', '16', '20', '30') 'The biggest CPU setting in iRacing.'
+    New-PerfSetting 'Graphics Options/MaxCarsToDrawInMirrors' 'Cars drawn in mirrors (4-64)' 'World detail (CPU)' @('4', '6', '8', '12') ''
     New-PerfSetting 'Graphics Options/MaxCockpitMirrors' 'Cockpit mirrors (0-4)' 'World detail (CPU)' $null 'Each mirror draws the scene again. Fewer is faster.'
     New-PerfSetting 'Graphics Options/MirrorDetail' 'Mirror detail (1 = high)' 'World detail (CPU)' '0' ''
-    New-PerfSetting 'Graphics Options/ObjectDetail' 'Object population (0-2)' 'World detail (CPU)' '1' ''
-    New-PerfSetting 'Graphics Options/CrowdDetail' 'Crowd (0-3)' 'World detail (CPU)' '1' ''
-    New-PerfSetting 'Graphics Options/GrandstandDetail' 'Grandstands (0-2)' 'World detail (CPU)' '1' ''
-    New-PerfSetting 'Graphics Options/PitObjectDetail' 'Pit objects (0-3)' 'World detail (CPU)' '1' ''
-    New-PerfSetting 'Graphics Options/FoliageDetail' 'Foliage (0-3)' 'World detail (CPU)' '1' ''
-    New-PerfSetting 'Graphics Options/ParticleDetail' 'Particles (0-2)' 'World detail (CPU)' '1' ''
-    New-PerfSetting 'Graphics Options/WeekendDetail' 'Event detail (0-2)' 'World detail (CPU)' '1' ''
+    New-PerfSetting 'Graphics Options/ObjectDetail' 'Object population (0-2)' 'World detail (CPU)' @('0', '1', '1', '2') ''
+    New-PerfSetting 'Graphics Options/CrowdDetail' 'Crowd (0-3)' 'World detail (CPU)' @('0', '1', '1', '2') ''
+    New-PerfSetting 'Graphics Options/GrandstandDetail' 'Grandstands (0-2)' 'World detail (CPU)' @('0', '1', '1', '2') ''
+    New-PerfSetting 'Graphics Options/PitObjectDetail' 'Pit objects (0-3)' 'World detail (CPU)' @('0', '1', '1', '2') ''
+    New-PerfSetting 'Graphics Options/FoliageDetail' 'Foliage (0-3)' 'World detail (CPU)' @('0', '1', '1', '2') ''
+    New-PerfSetting 'Graphics Options/ParticleDetail' 'Particles (0-2)' 'World detail (CPU)' @('0', '1', '1', '2') ''
+    New-PerfSetting 'Graphics Options/WeekendDetail' 'Event detail (0-2)' 'World detail (CPU)' @('0', '1', '1', '2') ''
 )
 
 # Assetto Corsa: cfg\video.ini (Content Manager also writes this file - lock only what you want to keep)
 $AcSettings = @(
-    New-PerfSetting 'VIDEO/AASAMPLES' 'Anti-aliasing samples (MSAA)' 'Graphics (GPU)' '2' 'Each step doubles the cost in VR. 2 or 4.'
-    New-PerfSetting 'VIDEO/SHADOW_MAP_SIZE' 'Shadow resolution' 'Graphics (GPU)' '2048' '1024, 2048 or 4096.'
+    New-PerfSetting 'VIDEO/AASAMPLES' 'Anti-aliasing samples (MSAA)' 'Graphics (GPU)' @('0', '2', '2', '4') 'Each step doubles the cost in VR. 2 or 4.'
+    New-PerfSetting 'VIDEO/SHADOW_MAP_SIZE' 'Shadow resolution' 'Graphics (GPU)' @('1024', '2048', '2048', '4096') '1024, 2048 or 4096.'
     New-PerfSetting 'VIDEO/ANISOTROPIC' 'Texture filtering' 'Graphics (GPU)' $null '0, 2, 4, 8 or 16.'
     New-PerfSetting 'POST_PROCESS/ENABLED' 'Post processing (1 = on)' 'Graphics (GPU)' $null ''
     New-PerfSetting 'POST_PROCESS/DOF' 'Depth of field (0-5)' 'Graphics (GPU)' '0' 'Blurs things in VR and costs GPU time.'
     New-PerfSetting 'POST_PROCESS/HEAT_SHIMMER' 'Heat shimmer (1 = on)' 'Graphics (GPU)' '0' ''
     New-PerfSetting 'POST_PROCESS/GLARE' 'Glare (0-5)' 'Graphics (GPU)' $null ''
-    New-PerfSetting 'CUBEMAP/FACES_PER_FRAME' 'Reflection faces per frame (0-6)' 'Graphics (GPU)' '1' 'Car reflections redrawn each frame. 1 is a big saving and still looks good.'
-    New-PerfSetting 'CUBEMAP/SIZE' 'Reflection resolution' 'Graphics (GPU)' '512' ''
-    New-PerfSetting 'EFFECTS/SMOKE' 'Smoke (0-5)' 'Graphics (GPU)' '2' ''
+    New-PerfSetting 'CUBEMAP/FACES_PER_FRAME' 'Reflection faces per frame (0-6)' 'Graphics (GPU)' @('1', '1', '1', '2') 'Car reflections redrawn each frame. 1 is a big saving and still looks good.'
+    New-PerfSetting 'CUBEMAP/SIZE' 'Reflection resolution' 'Graphics (GPU)' @('256', '512', '512', '1024') ''
+    New-PerfSetting 'EFFECTS/SMOKE' 'Smoke (0-5)' 'Graphics (GPU)' @('1', '2', '2', '3') ''
     New-PerfSetting 'EFFECTS/RENDER_SMOKE_IN_MIRROR' 'Smoke in mirrors (1 = on)' 'World detail (CPU)' '0' ''
     New-PerfSetting 'MIRROR/HQ' 'High quality mirrors (1 = on)' 'World detail (CPU)' '0' ''
-    New-PerfSetting 'MIRROR/SIZE' 'Mirror resolution' 'World detail (CPU)' '512' ''
-    New-PerfSetting 'ASSETTOCORSA/WORLD_DETAIL' 'World detail (0-5)' 'World detail (CPU)' '4' ''
+    New-PerfSetting 'MIRROR/SIZE' 'Mirror resolution' 'World detail (CPU)' @('256', '512', '512', '1024') ''
+    New-PerfSetting 'ASSETTOCORSA/WORLD_DETAIL' 'World detail (0-5)' 'World detail (CPU)' @('3', '4', '4', '5') ''
 )
 
 # DCS World: Saved Games\DCS\Config\options.lua
 $DcsSettings = @(
     New-PerfSetting 'VR/pixel_density' 'VR pixel density' 'Resolution & timing' $null '1.0 = the headset resolution. Leave at 1.0 if Pimax or OpenXR Toolkit sets the resolution.'
     New-PerfSetting 'graphics/MSAA' 'MSAA (0 = off)' 'Graphics (GPU)' $null 'MSAA is very expensive in VR; DLSS is usually the better choice.'
-    New-PerfSetting 'graphics/shadows' 'Shadows (0-4)' 'Graphics (GPU)' '2' ''
+    New-PerfSetting 'graphics/shadows' 'Shadows (0-4)' 'Graphics (GPU)' @('1', '2', '2', '3') ''
     New-PerfSetting 'graphics/SSAO' 'SSAO (0 = off)' 'Graphics (GPU)' '0' ''
     New-PerfSetting 'graphics/SSLR' 'Screen space reflections (0 = off)' 'Graphics (GPU)' '0' ''
     New-PerfSetting 'graphics/DOF' 'Depth of field (0 = off)' 'Graphics (GPU)' '0' ''
@@ -164,12 +164,12 @@ $DcsSettings = @(
     New-PerfSetting 'graphics/LensEffects' 'Lens effects (0 = off)' 'Graphics (GPU)' '0' ''
     New-PerfSetting 'graphics/heatBlr' 'Heat blur (0 = off)' 'Graphics (GPU)' '0' ''
     New-PerfSetting 'graphics/clouds' 'Cloud quality' 'Graphics (GPU)' $null ''
-    New-PerfSetting 'graphics/visibRange' 'Visible range' 'World detail (CPU)' 'Medium' 'Low, Medium, High, Ultra, Extreme.'
-    New-PerfSetting 'graphics/clutterMaxDistance' 'Clutter / grass distance (0-1500)' 'World detail (CPU)' '400' ''
-    New-PerfSetting 'graphics/forestDistanceFactor' 'Tree visibility (0.1-1)' 'World detail (CPU)' '0.5' ''
-    New-PerfSetting 'graphics/forestDetailsFactor' 'Forest details (0.1-1)' 'World detail (CPU)' '0.5' ''
+    New-PerfSetting 'graphics/visibRange' 'Visible range' 'World detail (CPU)' @('Low', 'Medium', 'Medium', 'High') 'Low, Medium, High, Ultra, Extreme.'
+    New-PerfSetting 'graphics/clutterMaxDistance' 'Clutter / grass distance (0-1500)' 'World detail (CPU)' @('200', '400', '400', '600') ''
+    New-PerfSetting 'graphics/forestDistanceFactor' 'Tree visibility (0.1-1)' 'World detail (CPU)' @('0.3', '0.5', '0.5', '0.7') ''
+    New-PerfSetting 'graphics/forestDetailsFactor' 'Forest details (0.1-1)' 'World detail (CPU)' @('0.3', '0.5', '0.5', '0.75') ''
     New-PerfSetting 'graphics/sceneryDetailsFactor' 'Scenery details (0.1-1)' 'World detail (CPU)' $null ''
-    New-PerfSetting 'graphics/civTraffic' 'Civilian traffic' 'World detail (CPU)' 'low' 'empty string = off, low, medium, high.'
+    New-PerfSetting 'graphics/civTraffic' 'Civilian traffic' 'World detail (CPU)' @('low', 'low', 'low', 'medium') 'empty string = off, low, medium, high.'
     New-PerfSetting 'graphics/terrainTextures' 'Terrain textures' 'World detail (CPU)' $null 'min or max.'
     New-PerfSetting 'graphics/maxFPS' 'Frame rate limit' 'Resolution & timing' $null 'Used when the headset does not set the frame rate.'
 )
@@ -178,32 +178,32 @@ $DcsSettings = @(
 $Ams2Settings = @(
     New-PerfSetting 'AntiAlias' 'Anti-aliasing (0 = off)' 'Graphics (GPU)' $null ''
     New-PerfSetting 'VRSuperSampling' 'VR supersampling (0 = off)' 'Graphics (GPU)' $null ''
-    New-PerfSetting 'ShadowDetailLevel' 'Shadow detail (0 = low)' 'Graphics (GPU)' '1' ''
-    New-PerfSetting 'EffectsDetailLevel' 'Effects detail (0 = low)' 'Graphics (GPU)' '1' ''
-    New-PerfSetting 'EnvmapDetailLevel' 'Reflection map detail (0 = low)' 'Graphics (GPU)' '1' ''
-    New-PerfSetting 'EnvmapReflectionDetailLevel' 'Reflection detail (0 = low)' 'Graphics (GPU)' '0' ''
+    New-PerfSetting 'ShadowDetailLevel' 'Shadow detail (0 = low)' 'Graphics (GPU)' @('0', '1', '1', '2') ''
+    New-PerfSetting 'EffectsDetailLevel' 'Effects detail (0 = low)' 'Graphics (GPU)' @('0', '1', '1', '2') ''
+    New-PerfSetting 'EnvmapDetailLevel' 'Reflection map detail (0 = low)' 'Graphics (GPU)' @('0', '1', '1', '2') ''
+    New-PerfSetting 'EnvmapReflectionDetailLevel' 'Reflection detail (0 = low)' 'Graphics (GPU)' @('0', '0', '0', '1') ''
     New-PerfSetting 'MotionblurLevel' 'Motion blur (0 = off)' 'Graphics (GPU)' '0' ''
     New-PerfSetting 'TextureResolution' 'Texture resolution' 'Graphics (GPU)' $null ''
-    New-PerfSetting 'CarDetailLevel' 'Car detail (0 = low)' 'World detail (CPU)' '1' ''
-    New-PerfSetting 'TrackDetailLevel' 'Track detail (0 = low)' 'World detail (CPU)' '1' ''
+    New-PerfSetting 'CarDetailLevel' 'Car detail (0 = low)' 'World detail (CPU)' @('0', '1', '1', '2') ''
+    New-PerfSetting 'TrackDetailLevel' 'Track detail (0 = low)' 'World detail (CPU)' @('0', '1', '1', '2') ''
     New-PerfSetting 'MaxVisibleVehicles' 'Visible cars (setting step)' 'World detail (CPU)' $null 'The step picked in the menu (0 = fewest).'
     New-PerfSetting 'MirrorEnhanced' 'Enhanced mirror (1 = on)' 'World detail (CPU)' '0' ''
 )
 
 # RaceRoom: UserData\graphics_options.xml
 $R3eSettings = @(
-    New-PerfSetting 'multiSampleLevel' 'Anti-aliasing samples' 'Graphics (GPU)' '2' ''
+    New-PerfSetting 'multiSampleLevel' 'Anti-aliasing samples' 'Graphics (GPU)' @('0', '2', '2', '4') ''
     New-PerfSetting 'enableBloom' 'Bloom (true/false)' 'Graphics (GPU)' $null ''
     New-PerfSetting 'enableSunRays' 'Sun rays (true/false)' 'Graphics (GPU)' 'false' ''
     New-PerfSetting 'enableMotionBlur' 'Motion blur (true/false)' 'Graphics (GPU)' 'false' ''
     New-PerfSetting 'enableDof' 'Depth of field (true/false)' 'Graphics (GPU)' 'false' ''
     New-PerfSetting 'enableLensEffects' 'Lens effects (true/false)' 'Graphics (GPU)' 'false' ''
-    New-PerfSetting 'allowDynamicReflections' 'Dynamic reflections (true/false)' 'Graphics (GPU)' 'false' ''
-    New-PerfSetting 'shadowFilterDetail' 'Shadow filtering (0-4)' 'Graphics (GPU)' '2' ''
+    New-PerfSetting 'allowDynamicReflections' 'Dynamic reflections (true/false)' 'Graphics (GPU)' @('false', 'false', 'false', 'true') ''
+    New-PerfSetting 'shadowFilterDetail' 'Shadow filtering (0-4)' 'Graphics (GPU)' @('1', '2', '2', '3') ''
     New-PerfSetting 'overallDetailLevel' 'Overall detail (0-3)' 'World detail (CPU)' $null ''
-    New-PerfSetting 'lodDetailLevel' 'Level of detail (0-2)' 'World detail (CPU)' '1' ''
+    New-PerfSetting 'lodDetailLevel' 'Level of detail (0-2)' 'World detail (CPU)' @('0', '1', '1', '2') ''
     New-PerfSetting 'lodTrackLevel' 'Track detail (0-2)' 'World detail (CPU)' $null ''
-    New-PerfSetting 'particleDetailLevel' 'Particles (0-2)' 'World detail (CPU)' '1' ''
+    New-PerfSetting 'particleDetailLevel' 'Particles (0-2)' 'World detail (CPU)' @('0', '1', '1', '2') ''
 )
 
 # Falcon BMS: changes go in "Falcon BMS User.cfg", which BMS reads after "Falcon BMS.cfg" and an update never replaces
@@ -212,11 +212,11 @@ $BmsSettings = @(
     New-PerfSetting 'g_bVRParallelRenderThread' 'Multi-threaded VR rendering (1 = on)' 'Resolution & timing' '1' 'Higher frame rate; 0 = lower latency.'
     New-PerfSetting 'g_nVRExternalRenderingMode' 'Outside world rendering (0-2)' 'Resolution & timing' $null '0 = mixed (stereo near the ground), 1 = always mono (fastest), 2 = always stereo.'
     New-PerfSetting 'g_bVRNoPresent' 'No desktop mirror window (1 = none)' 'Desktop window' $null 'Skips drawing the desktop window. Saves a little GPU time, but you will not see the sim on your monitor.'
-    New-PerfSetting 'g_bNewTerrainRenderGrass' 'Grass (1 = on)' 'World detail (CPU)' '0' ''
-    New-PerfSetting 'g_fNewTerrainProceduralDistance' 'Procedural terrain distance (km)' 'World detail (CPU)' '8.0' 'Heavy at low altitude. BMS default is 12.'
+    New-PerfSetting 'g_bNewTerrainRenderGrass' 'Grass (1 = on)' 'World detail (CPU)' @('0', '0', '0', '1') ''
+    New-PerfSetting 'g_fNewTerrainProceduralDistance' 'Procedural terrain distance (km)' 'World detail (CPU)' @('4.0', '6.0', '8.0', '12.0') 'Heavy at low altitude. BMS default is 12.'
     New-PerfSetting 'g_nNewTerrainHiresTilesDistKM' 'High-res terrain distance (0, 16 or 32 km)' 'World detail (CPU)' $null ''
     New-PerfSetting 'g_bShadowOnSmoke' 'Shadows on smoke (1 = on)' 'Graphics (GPU)' '0' ''
-    New-PerfSetting 'g_bEnvMapRenderClouds' 'Clouds in reflections (1 = on)' 'Graphics (GPU)' '0' ''
+    New-PerfSetting 'g_bEnvMapRenderClouds' 'Clouds in reflections (1 = on)' 'Graphics (GPU)' @('0', '0', '0', '1') ''
 )
 function Get-BmsUserCfg {
     $dirs = @()
@@ -252,6 +252,42 @@ $PerfGames = @(
     [pscustomobject]@{ Id = 'r3e'; Name = 'RaceRoom Racing Experience'; Process = 'RRRE64'; RouteMatch = 'RaceRoom|steam://\w+/211500\b'; Format = 'xmltag'; Settings = $R3eSettings
                        Configs = @(Join-Path $Docs 'My Games\SimBin\RaceRoom Racing Experience\UserData\graphics_options.xml') }
 )
+
+# ---- This PC: graphics card, processor and memory, sorted into 4 levels so suggestions fit the hardware ----
+$PerfTierNames = @('Entry', 'Mid-range', 'High-end', 'Top-end')
+function Get-PcProfile {
+    if ($script:PcProfile) { return $script:PcProfile }
+    $gpu = $null; $vram = 0
+    try {
+        foreach ($k in Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}' -ErrorAction SilentlyContinue) {
+            $pr = Get-ItemProperty $k.PSPath -ErrorAction SilentlyContinue
+            $mem = [long]$pr.'HardwareInformation.qwMemorySize'
+            if ($pr.DriverDesc -and $mem -gt $vram) { $vram = $mem; $gpu = [string]$pr.DriverDesc }
+        }
+    } catch { }
+    if (-not $gpu) { $gpu = (Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'NVIDIA|AMD|Radeon|Arc' } | Select-Object -First 1).Name }
+    $cpu = ''; try { $cpu = ((Get-CimInstance Win32_Processor -ErrorAction Stop | Select-Object -First 1).Name -replace '\s+', ' ').Trim() } catch { }
+    $ram = 0; try { $ram = [math]::Round((Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).TotalPhysicalMemory / 1GB) } catch { }
+    $vramGb = [math]::Round($vram / 1GB)
+    # Graphics card: by model, then by memory for cards not listed
+    $g = if ($gpu -match 'RTX\s*(5090|4090|5080|4080)|RX\s*7900\s*XTX') { 3 }
+         elseif ($gpu -match 'RTX\s*(3090|3080|4070|5070)|RX\s*(7900|9070|6950|6900)') { 2 }
+         elseif ($gpu -match 'RTX\s*(3070|2080|4060\s*Ti|3060\s*Ti|5060)|RX\s*(6800|6750|6700|7800|7700|9060)|Arc\s*B580') { 1 }
+         elseif ($vramGb -ge 16) { 2 } elseif ($vramGb -ge 10) { 1 } else { 0 }
+    # Processor: VR sims mostly need one fast core, so newer and X3D chips rank higher
+    $c = if ($cpu -match 'X3D|i9-1[34]\d{3}|Core\(TM\) Ultra 9|Ultra 9 2\d\d|Ryzen 9 [79]\d{3}') { 3 }
+         elseif ($cpu -match 'i7-1[34]\d{3}|i9-12\d{3}|Ultra 7 2\d\d|Ryzen [57] [79]\d{3}|i5-1[34]6\d{2}') { 2 }
+         elseif ($cpu -match 'i[579]-1[0-2]\d{3}|i[579]-1[34]\d{3}|Ultra [579]|Ryzen [579] [5]\d{3}|Ryzen [3579] [7]\d{3}') { 1 }
+         else { 0 }
+    $script:PcProfile = [pscustomobject]@{ Gpu = $gpu; VramGB = $vramGb; Cpu = $cpu; RamGB = $ram; GpuTier = $g; CpuTier = $c }
+    return $script:PcProfile
+}
+# A setting's suggestion for the chosen levels (GPU level for graphics settings, CPU level for world detail)
+function Get-PerfRec($def, [int]$gpuTier, [int]$cpuTier) {
+    $r = $def.Recommended
+    if ($r -is [array]) { return [string]$r[$(if ($def.Group -eq 'World detail (CPU)') { $cpuTier } else { $gpuTier })] }
+    return $r
+}
 
 function Get-PerfGame([string]$id) { $PerfGames | Where-Object { $_.Id -eq $id } | Select-Object -First 1 }
 # Where a game keeps its settings file (some are found by a small search, done once per run)
@@ -2887,6 +2923,11 @@ function Show-Performance([string]$startId) {
         </StackPanel>
       </Border>
       <DockPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
+        <TextBlock DockPanel.Dock="Top" x:Name="PcInfo" Foreground="#8B93A5" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,6"/>
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,10">
+          <TextBlock Text="Suggestions sized for:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+          <ComboBox x:Name="TierPick" Width="330"/>
+        </StackPanel>
         <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoSave}" x:Name="Save" DockPanel.Dock="Right" Content="Save" Background="#16A34A" BorderBrush="#22C55E" FontWeight="SemiBold"/>
         <Button Style="{StaticResource IconBtn}" Tag="{StaticResource IcoCheck}" x:Name="SaveApply" DockPanel.Dock="Right" Content="Save &amp; apply now" Margin="0,0,8,0"
                 ToolTip="Save, and write the locked settings into the game's file right away (the game must be closed)"/>
@@ -2916,6 +2957,16 @@ function Show-Performance([string]$startId) {
     $script:pfCfg = Read-PerfConfig
     $script:pfDirty = $false; $script:pfTarget = $null; $script:pfRows = @()
     $script:pfMask = Get-PCoreMask
+    $pc = Get-PcProfile
+    $w.FindName('PcInfo').Text = "This PC: $(if ($pc.Gpu) { $pc.Gpu } else { 'graphics card not detected' })$(if ($pc.VramGB) { " ($($pc.VramGB) GB)" })  -  $(if ($pc.Cpu) { $pc.Cpu } else { 'processor not detected' })  -  $($pc.RamGB) GB RAM"
+    $script:pfTier = $w.FindName('TierPick')
+    $auto = New-Object Windows.Controls.ComboBoxItem
+    $auto.Content = "This PC: graphics $($PerfTierNames[$pc.GpuTier]), processor $($PerfTierNames[$pc.CpuTier])"; $auto.Tag = @($pc.GpuTier, $pc.CpuTier)
+    [void]$script:pfTier.Items.Add($auto)
+    for ($i = 0; $i -lt 4; $i++) { $ci = New-Object Windows.Controls.ComboBoxItem; $ci.Content = "$($PerfTierNames[$i]) PC"; $ci.Tag = @($i, $i); [void]$script:pfTier.Items.Add($ci) }
+    $script:pfTier.SelectedIndex = 0
+    $script:pfTier.ToolTip = 'Recommended for VR uses lighter settings for less powerful PCs. Graphics settings follow the graphics card, world detail follows the processor. Pick a level to override what was detected.'
+    $script:pfTiers = { $s = $script:pfTier.SelectedItem.Tag; return @([int]$s[0], [int]$s[1]) }
 
     foreach ($pg in ($PerfGames | Sort-Object @{ Expression = { if (Get-PerfConfigPath $_) { 0 } else { 1 } } }, @{ Expression = { [array]::IndexOf($PerfGames, $_) } })) {
         $it = New-Object Windows.Controls.ListBoxItem; $it.Tag = $pg.Id; $it.Padding = '6,6'
@@ -2979,7 +3030,8 @@ function Show-Performance([string]$startId) {
             $hint = New-Object Windows.Controls.TextBlock; $hint.VerticalAlignment = 'Center'; $hint.Margin = '12,0,0,0'; $hint.TextTrimming = 'CharacterEllipsis'
             $hint.Text = $(if ($has) { "In the game now: $($cur[$def.Key])" } elseif ($path) { 'Not in the file' } else { '' })
             $hint.Foreground = $(if ($locked -and $has -and [string]$cur[$def.Key] -ne [string]$e.values[$def.Key]) { '#FB923C' } else { '#7A8397' })
-            if ($def.Recommended) { $hint.ToolTip = "VR starting point: $($def.Recommended)" }
+            $tl = & $script:pfTiers; $rv = Get-PerfRec $def $tl[0] $tl[1]
+            if ($null -ne $rv) { $hint.ToolTip = "VR starting point for the level picked below: $rv" }
             $cb.IsChecked = $locked; $tb.IsEnabled = $locked
             $cb.IsEnabled = [bool]$path -and ($has -or $pg.Format -eq 'scs')
             $cb.Add_Click({ $this.Tag.Box.IsEnabled = [bool]$this.IsChecked; if (-not $script:pfLoading) { $script:pfDirty = $true } })
@@ -3033,18 +3085,21 @@ function Show-Performance([string]$startId) {
         }
         & $script:pfLoad ([string]$it.Tag)
     })
+    $script:pfTier.Add_SelectionChanged({ if ($script:pfTarget -and -not $script:pfLoading) { try { & $script:pfStore } catch { }; & $script:pfLoad $script:pfTarget } })
     foreach ($c in $script:pfPin, $script:pfKeep, $script:pfLock) { $c.Add_Click({ if (-not $script:pfLoading) { $script:pfDirty = $true } }) }
 
     $w.FindName('Recommend').Add_Click({
         $n = 0
+        $tl = & $script:pfTiers
         foreach ($row in $script:pfRows) {
-            if ($null -eq $row.Def.Recommended -or -not $row.Check.IsEnabled) { continue }
-            $row.Check.IsChecked = $true; $row.Box.IsEnabled = $true; $row.Box.Text = [string]$row.Def.Recommended; $n++
+            $rv = Get-PerfRec $row.Def $tl[0] $tl[1]
+            if ($null -eq $rv -or -not $row.Check.IsEnabled) { continue }
+            $row.Check.IsChecked = $true; $row.Box.IsEnabled = $true; $row.Box.Text = [string]$rv; $n++
         }
         $script:pfLock.IsChecked = $true
         if ($script:pfMask) { $script:pfPin.IsChecked = $true }
         $script:pfKeep.IsChecked = $true; $script:pfDirty = $true
-        & $script:pfSay "Filled in $n VR starting values (hover a setting to see what it does). Check them, then Save."
+        & $script:pfSay "Filled in $n VR starting values for a $($PerfTierNames[$tl[0]].ToLower()) graphics card and $($PerfTierNames[$tl[1]].ToLower()) processor (hover a setting to see what it does). Check them, then Save."
     })
     $w.FindName('UseCurrent').Add_Click({
         $n = 0
