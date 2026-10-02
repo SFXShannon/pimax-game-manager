@@ -37,7 +37,7 @@ try {
     if ((Test-Path $legacyCfg) -and -not (Test-Path $newCfg)) { Copy-Item $legacyCfg $newCfg }
 } catch { }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
-$AppVersion = '1.11.0'
+$AppVersion = '1.11.1'
 $RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-game-manager/releases/latest'
 
 # ---------- Performance: lock game settings, performance cores, window fix, background guard ----------
@@ -713,6 +713,29 @@ namespace PGMPerf {
 }
 '@
 } catch { }
+# Whether running a game on the performance cores only is worth it: 'yes', 'no' or 'try', with the reason.
+# Older engines lean on one main thread, so keeping it off the efficiency cores helps; engines that spread
+# their work over many threads use the efficiency cores for streaming and background jobs, so leave them on.
+$PerfPinAdvice = @{
+    ats      = @('yes', 'ATS runs almost everything on one main thread, so keeping it off the slower cores removes stutters in towns and traffic.')
+    ets2     = @('yes', 'ETS2 runs almost everything on one main thread, so keeping it off the slower cores removes stutters in towns and traffic.')
+    msfs2024 = @('no', 'MSFS spreads its work over many threads and uses the efficiency cores to stream scenery. It is usually limited by the graphics card, so this can add stutters without adding frames.')
+    msfs2020 = @('no', 'MSFS spreads its work over many threads and uses the efficiency cores to stream scenery. It is usually limited by the graphics card, so this can add stutters without adding frames.')
+    dcs      = @('no', 'DCS (multithreaded version) spreads its work over many cores and uses the efficiency cores for background jobs.')
+    bms      = @('yes', 'Falcon BMS leans on one main thread, so keeping it on the fast cores helps hold frame rate in busy scenes.')
+    iracing  = @('yes', 'iRacing''s simulation and drawing run on a few busy threads, so keeping them on the fast cores helps hold frame rate in a full field.')
+    ac       = @('yes', 'Assetto Corsa''s older engine leans on one main thread, so this helps in full grids.')
+    ams2     = @('try', 'Automobilista 2 uses several threads. It can help with big grids; test a race both ways.')
+    r3e      = @('yes', 'RaceRoom''s older engine leans on one main thread, so this helps in full grids.')
+    acc      = @('try', 'ACC (Unreal Engine 4) uses several threads. It can help with full grids; test both ways.')
+    acr      = @('no', 'Assetto Corsa Rally (Unreal Engine 5) spreads its work over many threads and is mostly limited by the graphics card.')
+    crysisvr = @('yes', 'Crysis''s 2007 engine leans on one or two threads, so keeping them on the fast cores helps.')
+    skyrimvr = @('yes', 'Skyrim''s engine leans on one main thread, and heavy mod lists make it worse, so this helps.')
+}
+function Get-PinAdvice($pg) {
+    if ($PerfPinAdvice.ContainsKey($pg.Id)) { return $PerfPinAdvice[$pg.Id] }
+    return @('try', 'Older games that use one main thread usually gain; newer engines that use many threads usually don''t. Test the game both ways.')
+}
 function Get-PCoreMask { try { [long][PGMPerf.Cpu]::PerformanceCoreMask() } catch { 0L } }
 function Get-PCoreText([long]$mask) {
     if (-not $mask) { return '' }
@@ -3133,6 +3156,7 @@ function Show-Performance([string]$startId) {
       <Border DockPanel.Dock="Top" Background="#14171E" BorderBrush="#222733" BorderThickness="1" CornerRadius="10" Padding="12,10" Margin="0,0,0,10">
         <StackPanel>
           <CheckBox x:Name="PinCores" Content="Run the game on the performance cores only"/>
+          <TextBlock x:Name="PinAdvice" Margin="26,3,0,0" FontSize="12" FontWeight="SemiBold" TextWrapping="Wrap"/>
           <TextBlock x:Name="PinInfo" Margin="26,2,0,8" FontSize="12" Foreground="#8B93A5" TextWrapping="Wrap"/>
           <CheckBox x:Name="KeepWindow" Content="Keep the game's desktop window on screen"/>
           <TextBlock Margin="26,2,0,8" FontSize="12" Foreground="#8B93A5" TextWrapping="Wrap"
@@ -3176,7 +3200,7 @@ function Show-Performance([string]$startId) {
     $w = $script:pw2
     $script:pfTargets = $w.FindName('Targets'); $script:pfRowsGrid = $w.FindName('Rows')
     $script:pfTitle = $w.FindName('Title'); $script:pfInfo = $w.FindName('Info'); $script:pfStatus = $w.FindName('Status')
-    $script:pfPin = $w.FindName('PinCores'); $script:pfPinInfo = $w.FindName('PinInfo'); $script:pfKeep = $w.FindName('KeepWindow'); $script:pfLock = $w.FindName('LockOn')
+    $script:pfPin = $w.FindName('PinCores'); $script:pfPinInfo = $w.FindName('PinInfo'); $script:pfPinAdvice = $w.FindName('PinAdvice'); $script:pfKeep = $w.FindName('KeepWindow'); $script:pfLock = $w.FindName('LockOn')
     $script:pfGuardOn = $w.FindName('GuardOn'); $script:pfGuardState = $w.FindName('GuardState')
     $script:pfSay = { param([string]$m, [bool]$bad = $false) $script:pfStatus.Foreground = $(if ($bad) { '#F87171' } else { '#4ADE80' }); $script:pfStatus.Text = $m }
     $script:pfCfg = Read-PerfConfig
@@ -3239,6 +3263,10 @@ function Show-Performance([string]$startId) {
         $script:pfPin.IsEnabled = [bool]$script:pfMask
         $script:pfPinInfo.Text = $(if ($script:pfMask) { "Your CPU has performance and efficiency cores. The game is kept on the performance cores ($(Get-PCoreText $script:pfMask)) and given a slightly higher priority, so its main thread never lands on a slower core." }
                                    else { "Not needed on this PC: all its CPU cores are the same type." })
+        $adv = Get-PinAdvice $pg
+        $script:pfPinAdvice.Visibility = $(if ($script:pfMask) { 'Visible' } else { 'Collapsed' })
+        $script:pfPinAdvice.Text = switch ($adv[0]) { 'yes' { "Recommended for this game. $($adv[1])" } 'no' { "Not recommended for this game. $($adv[1])" } default { "Worth testing. $($adv[1])" } }
+        $script:pfPinAdvice.Foreground = switch ($adv[0]) { 'yes' { '#4ADE80' } 'no' { '#FB923C' } default { '#93C5FD' } }
         $script:pfRowsGrid.Children.Clear(); $script:pfRowsGrid.RowDefinitions.Clear(); $script:pfRowsGrid.ColumnDefinitions.Clear()
         foreach ($cw in 70, 280, 150, '*') { $cd = New-Object Windows.Controls.ColumnDefinition; $cd.Width = $(if ($cw -eq '*') { New-Object Windows.GridLength(1, 'Star') } else { New-Object Windows.GridLength($cw) }); $script:pfRowsGrid.ColumnDefinitions.Add($cd) }
         $script:pfRows = @(); $script:pfHeaders = @(); $r = 0; $lastGroup = $null
@@ -3335,7 +3363,7 @@ function Show-Performance([string]$startId) {
             $row.Check.IsChecked = $true; $row.Box.IsEnabled = $true; $row.Box.Text = [string]$rv; $n++
         }
         $script:pfLock.IsChecked = $true
-        if ($script:pfMask) { $script:pfPin.IsChecked = $true }
+        if ($script:pfMask) { $script:pfPin.IsChecked = ((Get-PinAdvice (Get-PerfGame $script:pfTarget))[0] -eq 'yes') }   # only where it helps
         $script:pfKeep.IsChecked = $true; $script:pfDirty = $true
         & $script:pfSay "Filled in $n VR starting values for a $($PerfTierNames[$tl[0]].ToLower()) graphics card and $($PerfTierNames[$tl[1]].ToLower()) processor (hover a setting to see what it does). Check them, then Save."
     })
@@ -4499,6 +4527,7 @@ if ($Test) {
         $csw = Show-CommunitySetups (Get-PerfGame 'ats'); Save-Shot $csw 'community-setups'; $csw.Close()
         $acw = Show-AddCustomGame; Save-Shot $acw 'add-custom'; $acw.Close()
         $pfw = Show-Performance 'acc'; Save-Shot $pfw 'performance-acc'; $pfw.Close()
+        $pfw = Show-Performance 'msfs2024'; Save-Shot $pfw 'performance-msfs'; $pfw.Close()
         $bw = Show-Backups $null $null; Save-Shot $bw 'backups'; $bw.Close()
         if ($pick) { $script:FinderTerm = 'Crysis'; $fw = Show-Finder $pick.Tag; Save-Shot $fw 'finder'; $fw.Close() }
         $aw = Show-AddGames

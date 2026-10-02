@@ -164,7 +164,7 @@ For each game:
 - **Recommended for VR** fills in a starting point for VR, sized for your PC: the app reads your graphics card, processor and memory (shown above the buttons) and sorts each into Entry, Mid-range, High-end or Top-end. Graphics settings follow the graphics card and world-detail settings follow the processor, so a strong GPU with an older CPU gets sharp graphics with a lighter world. Pick another level in **Suggestions sized for** to override it. Frame pacing is always left to the headset, and blur effects stay off. Settings without a suggestion are left alone; hover a setting to see what it does.
 - **Use current** copies what the game has now into the ticked settings, so you can tune in the game and then lock it.
 - **Restore original...** puts the game's file back the way it was before the app first changed it (a copy is kept the first time), and turns locking off so you can compare. Your locked values are kept: click **Save & apply now** to switch back (locking turns back on).
-- **Run the game on the performance cores only**: on CPUs with performance and efficiency cores (Intel 12th gen and later), the game is kept on the performance cores and given a slightly higher priority, so its main thread never lands on a slower core. Driving and flight sims are often limited by one CPU thread, so this can remove stutters. Hidden on CPUs where all cores are the same.
+- **Run the game on the performance cores only**: on CPUs with performance and efficiency cores (Intel 12th gen and later), the game is kept on the performance cores and given a slightly higher priority, so its main thread never lands on a slower core. Driving and flight sims are often limited by one CPU thread, so this can remove stutters. Under the option, the app says whether it's **recommended**, **not recommended** or **worth testing** for the selected game, with the reason: older single-thread engines (ATS, ETS2, iRacing, Assetto Corsa, Skyrim VR...) usually gain, while engines that use many threads, such as MSFS and DCS, usually don't and can stutter more. **Recommended for VR** follows that advice. Hidden on CPUs where all cores are the same.
 - **Keep the game's desktop window on screen**: if the game opens its desktop window off the edge of the monitor (often where a second screen used to be), it's moved back and made small.
 - **Save** stores your choices; **Save & apply now** also writes the locked settings into the game's file straight away (close the game first).
 
@@ -259,13 +259,13 @@ Add `-Guard` to run only the Performance Guard.
 
 ```powershell
 Install-Module ps2exe -Scope CurrentUser
-Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.11.0
+Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.11.1
 ```
 
 To build the installer too, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
-& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.11.0 .\PimaxGameManager.iss
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.11.1 .\PimaxGameManager.iss
 ```
 
 The app icon and `assets/logo.png` are generated from the logo shapes used in the app:
