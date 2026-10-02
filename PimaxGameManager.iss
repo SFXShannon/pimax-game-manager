@@ -46,4 +46,8 @@ Name: "{autodesktop}\Pimax Game Manager"; Filename: "{app}\PimaxGameManager.exe"
 ; shellexec so Windows can show the admin prompt the app needs
 Filename: "{app}\PimaxGameManager.exe"; Description: "Start Pimax Game Manager"; Flags: postinstall nowait skipifsilent shellexec
 
-; Uninstalling removes only the program files. Backups, covers and settings in %APPDATA%\PimaxGameManager are kept.
+[UninstallRun]
+; Stop the Performance Guard and remove its logon task before the files go (the app asks for admin, as the task was made with admin rights)
+Filename: "{app}\PimaxGameManager.exe"; Parameters: "-Uninstall"; Flags: shellexec waituntilterminated; RunOnceId: "RemoveGuard"; StatusMsg: "Stopping the Performance Guard..."
+
+; Uninstalling removes the program files and the Performance Guard's scheduled task. Game settings files are left as they are. Backups, covers and settings in %APPDATA%\PimaxGameManager are kept.

@@ -12,7 +12,7 @@ A Windows tool for managing your **Pimax Play** library: add games (one at a tim
 
 ## Download
 
-Get **`PimaxGameManagerSetup.exe`** from the [latest release](https://github.com/SFXShannon/pimax-game-manager/releases/latest) and run it. It installs to your user folder (no admin needed to install), adds a Start menu shortcut, and asks whether you want a desktop shortcut (ticked by default). To update, run the newer setup over the top. Uninstall from Windows **Settings > Apps**; your backups and settings are kept.
+Get **`PimaxGameManagerSetup.exe`** from the [latest release](https://github.com/SFXShannon/pimax-game-manager/releases/latest) and run it. It installs to your user folder (no admin needed to install), adds a Start menu shortcut, and asks whether you want a desktop shortcut (ticked by default). To update, run the newer setup over the top. Uninstall from Windows **Settings > Apps** (Windows asks for admin once, to stop the Performance Guard and remove its startup task). Your backups and settings are kept, and games' settings files are left as they are; use **Restore original...** in Performance first if you want a game's file put back.
 
 Prefer no install? Download **`PimaxGameManager.exe`** from the same page and run it from anywhere.
 
@@ -259,13 +259,13 @@ Add `-Guard` to run only the Performance Guard.
 
 ```powershell
 Install-Module ps2exe -Scope CurrentUser
-Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.11.1
+Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.11.2
 ```
 
 To build the installer too, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
-& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.11.1 .\PimaxGameManager.iss
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.11.2 .\PimaxGameManager.iss
 ```
 
 The app icon and `assets/logo.png` are generated from the logo shapes used in the app:

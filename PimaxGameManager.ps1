@@ -1,17 +1,17 @@
 # Pimax Game Manager - library images, library order, per-game settings and performance for Pimax Play
-# -Guard starts the Performance Guard (tray icon) instead of the window
-param([switch]$Test, [switch]$Guard)
+# -Guard starts the Performance Guard (tray icon) instead of the window; -Uninstall (run by the uninstaller) stops it and removes its scheduled task
+param([switch]$Test, [switch]$Guard, [switch]$Uninstall)
 
 # --- Run as admin (needed to restart the Pimax service) ---
 if (-not $Test -and -not $Guard) {
     $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`""
+        Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`"$(if ($Uninstall) { ' -Uninstall' })"
         exit
     }
 }
 
-if (-not $Guard) { Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Windows.Forms }
+if (-not $Guard -and -not $Uninstall) { Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Windows.Forms }
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $PimaxDir    = Join-Path $env:APPDATA 'Pimax'
@@ -37,7 +37,7 @@ try {
     if ((Test-Path $legacyCfg) -and -not (Test-Path $newCfg)) { Copy-Item $legacyCfg $newCfg }
 } catch { }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
-$AppVersion = '1.11.1'
+$AppVersion = '1.11.2'
 $RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-game-manager/releases/latest'
 
 # ---------- Performance: lock game settings, performance cores, window fix, background guard ----------
@@ -949,6 +949,14 @@ function Start-PerfGuard {
 # Started with -Guard: run the Performance Guard in the tray and nothing else
 if ($Guard) {
     try { Start-PerfGuard } catch { Write-PerfLog "Performance Guard stopped after an error: $($_.Exception.Message)" }
+    exit
+}
+
+# Started with -Uninstall (by the uninstaller): stop the guard and remove its logon task. Game settings and backups are left as they are.
+if ($Uninstall) {
+    try { Stop-Guard } catch { }
+    try { if (Get-GuardTask) { Unregister-ScheduledTask -TaskName $GuardTask -Confirm:$false -ErrorAction Stop } } catch { }
+    try { Write-PerfLog 'Uninstalled: Performance Guard stopped and its scheduled task removed' } catch { }
     exit
 }
 
