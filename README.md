@@ -137,7 +137,7 @@ Some games keep their own graphics settings in their own file, separate from Pim
 
 ![Performance](screenshots/performance-v1.9.0.png)
 
-Supported games (52) and the file each one keeps its settings in:
+Supported games (53) and the file each one keeps its settings in:
 
 | Game | Settings file |
 |---|---|
@@ -173,6 +173,7 @@ Supported games (52) and the file each one keeps its settings in:
 | EA Sports WRC | `%LOCALAPPDATA%\WRC\Saved\Config\WindowsNoEditor\GameUserSettings.ini` (the game's own `VR...` settings) |
 | Into the Radius 2 | `Documents\My Games\IntoTheRadius2\settings.ini` |
 | Project CARS 2, Project CARS | `Documents\Project CARS 2\graphicsconfigopenvrdx11.xml` (or `...oculusdx11.xml`; the newest VR file is used; same settings as Automobilista 2) |
+| Farming Simulator 25 (with the free [FS25VR](https://github.com/nick10180/FS25VR) mod) | `Documents\My Games\FarmingSimulator2025\game.xml` (view and detail distances, vsync off, DirectX 12 for the mod) |
 | Project CARS 3 | `%LOCALAPPDATA%\Slightly Mad Studios\Project CARS 3\GraphicsConfigOpenVRDX11.xml` (or `...OculusDX11.xml`) |
 | Unreal Engine games: The Walking Dead: Saints & Sinners, Medal of Honor: Above and Beyond, Project Wingman, Metro Awakening, Skydance's Behemoth, Alien: Rogue Incursion, Moss, Moss: Book II, Hellblade VR, Robo Recall, Zero Caliber VR, FNAF: Help Wanted, Riven | `GameUserSettings.ini` under `%LOCALAPPDATA%\<game>\Saved\Config` |
 
@@ -283,13 +284,13 @@ Add `-Guard` to run only the Performance Guard.
 
 ```powershell
 Install-Module ps2exe -Scope CurrentUser
-Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.12.1
+Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.12.2
 ```
 
 To build the installer too, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
-& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.12.1 .\PimaxGameManager.iss
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.12.2 .\PimaxGameManager.iss
 ```
 
 The app icon and `assets/logo.png` are generated from the logo shapes used in the app:

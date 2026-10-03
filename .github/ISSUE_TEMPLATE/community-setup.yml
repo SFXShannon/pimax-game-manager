@@ -12,7 +12,7 @@ body:
     id: game
     attributes:
       label: Game
-      options: [ats, ets2, msfs2024, msfs2020, dcs, bms, iracing, ac, ams2, r3e, acc, acr, crysisvr, skyrimvr, bns, beamng, pavlov, contractors, contractorsshowdown, kartkraft, mw5mercs, mw5clans, fo4vr, nms, elite, squadrons, starcitizen, warthunder, il2, rf2, lmu, f124, f125, dr2, eawrc, itr2, twd, mohab, projectwingman, metroawakening, behemoth, alienri, moss, moss2, hellbladevr, robo, zerocaliber, fnafhw, riven, pcars1, pcars2, pcars3]
+      options: [ats, ets2, msfs2024, msfs2020, dcs, bms, iracing, ac, ams2, r3e, acc, acr, crysisvr, skyrimvr, bns, beamng, pavlov, contractors, contractorsshowdown, kartkraft, mw5mercs, mw5clans, fo4vr, nms, elite, squadrons, starcitizen, warthunder, il2, rf2, lmu, f124, f125, dr2, eawrc, itr2, twd, mohab, projectwingman, metroawakening, behemoth, alienri, moss, moss2, hellbladevr, robo, zerocaliber, fnafhw, riven, pcars1, pcars2, pcars3, fs25]
     validations:
       required: true
   - type: textarea

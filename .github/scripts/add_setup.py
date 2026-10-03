@@ -17,7 +17,7 @@ GAMES = {
     "projectwingman": "Project Wingman", "metroawakening": "Metro Awakening", "behemoth": "Skydance's Behemoth",
     "alienri": "Alien: Rogue Incursion", "moss": "Moss", "moss2": "Moss: Book II",
     "hellbladevr": "Hellblade: Senua's Sacrifice VR", "robo": "Robo Recall", "zerocaliber": "Zero Caliber VR",
-    "fnafhw": "Five Nights at Freddy's: Help Wanted", "riven": "Riven", "pcars1": "Project CARS", "pcars2": "Project CARS 2", "pcars3": "Project CARS 3",
+    "fnafhw": "Five Nights at Freddy's: Help Wanted", "riven": "Riven", "pcars1": "Project CARS", "pcars2": "Project CARS 2", "pcars3": "Project CARS 3", "fs25": "Farming Simulator 25 (VR mod)",
 }
 PATH = "community/setups.json"
 

@@ -37,7 +37,7 @@ try {
     if ((Test-Path $legacyCfg) -and -not (Test-Path $newCfg)) { Copy-Item $legacyCfg $newCfg }
 } catch { }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
-$AppVersion = '1.12.1'
+$AppVersion = '1.12.2'
 $RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-game-manager/releases/latest'
 
 # ---------- Performance: lock game settings, performance cores, window fix, background guard ----------
@@ -617,6 +617,17 @@ function Get-BeamNgSettings {
 }
 # The most recently written of several possible settings files (games with one file per headset type)
 function Get-NewestOf([string[]]$paths) { $paths | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Sort-Object { (Get-Item -LiteralPath $_).LastWriteTimeUtc } -Descending | Select-Object -First 1 }
+# Farming Simulator 25: Documents\My Games\FarmingSimulator2025\game.xml (<viewDistanceCoeff>1.000000</viewDistanceCoeff>)
+$Fs25Settings = @(
+    New-PerfSetting 'renderer' 'Renderer' 'Resolution & timing' 'D3D_12' 'The FS25VR mod needs DirectX 12 (D3D_12).'
+    New-PerfSetting 'vsync' 'V-sync' 'Resolution & timing' 'false' 'The headset paces the frames in VR, not the monitor.'
+    New-PerfSetting 'volumeMeshTessellationCoeff' 'Volume mesh tessellation' 'Graphics (GPU)' $null 'Detail of soil, piles and other volume meshes.'
+    New-PerfSetting 'viewDistanceCoeff' 'View distance' 'World detail (CPU)' @('0.800000', '1.000000', '1.000000', '1.200000') 'How far objects are drawn.'
+    New-PerfSetting 'lodDistanceCoeff' 'Detail distance' 'World detail (CPU)' @('0.800000', '1.000000', '1.000000', '1.200000') 'How far models keep full detail.'
+    New-PerfSetting 'foliageViewDistanceCoeff' 'Foliage view distance' 'World detail (CPU)' @('0.800000', '1.000000', '1.000000', '1.200000') 'How far crops and grass are drawn.'
+    New-PerfSetting 'foliageLODDistanceCoeff' 'Foliage detail distance' 'World detail (CPU)' @('1.000000', '1.300000', '1.300000', '1.500000') 'The game''s default is 1.3.'
+    New-PerfSetting 'terrainLODDistanceCoeff' 'Terrain detail distance' 'World detail (CPU)' @('0.800000', '1.000000', '1.000000', '1.200000') ''
+)
 $UntestedNote = 'Settings for this game come from published guides and haven''t been checked against a real install yet. A setting that shows "Not in the file" isn''t used by your version.'
 
 $Docs = [Environment]::GetFolderPath('MyDocuments')
@@ -726,6 +737,10 @@ $PerfGames += @(
     New-UeGame 'zerocaliber' 'Zero Caliber VR' 'ZeroCaliber' '' '' $false '' $true ''
     New-UeGame 'fnafhw' 'Five Nights at Freddy''s: Help Wanted' 'freddys' '' '' $false '' $true ''
     New-UeGame 'riven' 'Riven' 'Riven' '' '' $true '' $true ''
+    [pscustomobject]@{ Id = 'fs25'; Name = 'Farming Simulator 25 (VR mod)'; Process = @('FarmingSimulator2025Game', 'FarmingSimulator2025'); RouteMatch = 'Farming Simulator 25|FarmingSimulator2025|steam://\w+/2300320\b'; Format = 'xmltag'; Settings = $Fs25Settings; Untested = $true
+                       Configs = @(Join-Path $Docs 'My Games\FarmingSimulator2025\game.xml')
+                       Note = 'VR comes from the free FS25VR mod (github.com/nick10180/FS25VR), which draws the eyes in turn, so each eye gets half the game''s frame rate: aim high. In the game''s menu, turn off frame generation, DLSS/DSR and motion blur. The mod''s SET VR RESOLUTION.bat sets the window size.'
+                       Pin = @('try', 'Farming Simulator leans on its main thread on busy farms, so it may help. Test it both ways.') }
     # Project CARS (same engine and settings as Automobilista 2). Each headset type has its own file; the newest one is used.
     [pscustomobject]@{ Id = 'pcars2'; Name = 'Project CARS 2'; Process = @('pCARS2AVX', 'pCARS2'); RouteMatch = 'Project CARS 2|\\pCARS2(AVX)?\.exe|steam://\w+/378860\b'; Format = 'xmlattr'; Settings = $Ams2Settings; Untested = $true
                        Configs = @({ Get-NewestOf @((Join-Path $Docs 'Project CARS 2\graphicsconfigopenvrdx11.xml'), (Join-Path $Docs 'Project CARS 2\graphicsconfigoculusdx11.xml')) }, (Join-Path $Docs 'Project CARS 2\graphicsconfigdx11.xml'))
@@ -984,7 +999,7 @@ function Split-PerfLines($pg, [string]$text) {
                 if ($m.Success) { $key = (@($stack) + $m.Groups[2].Value) -join '/'; $pre = $m.Groups[1].Value; $val = $m.Groups[3].Value; $post = $m.Groups[4].Value }
             }
             'xmlattr' { $m = [regex]::Match($line, '^(\s*<(?:prop|Property) name="([^"]+)" (?!type=)[A-Za-z_]+=")([^"]*)(".*)$'); if ($m.Success) { $key = $m.Groups[2].Value; $pre = $m.Groups[1].Value; $val = $m.Groups[3].Value; $post = $m.Groups[4].Value } }
-            'xmltag' { $m = [regex]::Match($line, '^(\s*<([A-Za-z_][\w]*)(?: type="[^"]*")?>)([^<]*)(</\2>.*)$'); if ($m.Success) { $key = $m.Groups[2].Value; $pre = $m.Groups[1].Value; $val = $m.Groups[3].Value; $post = $m.Groups[4].Value } }
+            'xmltag' { $m = [regex]::Match($line, '^(\s*<([A-Za-z_][\w]*)(?:\s[^<>]*)?>)([^<]*)(</\2>.*)$'); if ($m.Success) { $key = $m.Groups[2].Value; $pre = $m.Groups[1].Value; $val = $m.Groups[3].Value; $post = $m.Groups[4].Value } }
             'blk' {
                 if ($t -match '^([\w\-\.]+)\s*\{\s*$') { $stack.Add($Matches[1]); continue }
                 if ($t -eq '}') { if ($stack.Count) { $stack.RemoveAt($stack.Count - 1) }; continue }
