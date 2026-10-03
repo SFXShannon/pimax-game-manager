@@ -137,7 +137,7 @@ Some games keep their own graphics settings in their own file, separate from Pim
 
 ![Performance](screenshots/performance-v1.9.0.png)
 
-Supported games (49) and the file each one keeps its settings in:
+Supported games (52) and the file each one keeps its settings in:
 
 | Game | Settings file |
 |---|---|
@@ -172,6 +172,8 @@ Supported games (49) and the file each one keeps its settings in:
 | F1 24, F1 25, DiRT Rally 2.0 | `Documents\My Games\<game>\hardwaresettings\hardware_settings_config_vr.xml` (the VR file) |
 | EA Sports WRC | `%LOCALAPPDATA%\WRC\Saved\Config\WindowsNoEditor\GameUserSettings.ini` (the game's own `VR...` settings) |
 | Into the Radius 2 | `Documents\My Games\IntoTheRadius2\settings.ini` |
+| Project CARS 2, Project CARS | `Documents\Project CARS 2\graphicsconfigopenvrdx11.xml` (or `...oculusdx11.xml`; the newest VR file is used; same settings as Automobilista 2) |
+| Project CARS 3 | `%LOCALAPPDATA%\Slightly Mad Studios\Project CARS 3\GraphicsConfigOpenVRDX11.xml` (or `...OculusDX11.xml`) |
 | Unreal Engine games: The Walking Dead: Saints & Sinners, Medal of Honor: Above and Beyond, Project Wingman, Metro Awakening, Skydance's Behemoth, Alien: Rogue Incursion, Moss, Moss: Book II, Hellblade VR, Robo Recall, Zero Caliber VR, FNAF: Help Wanted, Riven | `GameUserSettings.ini` under `%LOCALAPPDATA%\<game>\Saved\Config` |
 
 For Unreal Engine games the app uses the engine's own quality groups (`sg.ShadowQuality` and the rest, 0 = low to 3 = epic), which every Unreal game reads. Games only write the ones you've changed in their menu, so a locked setting that's missing is added to the file. On Unreal Engine 5 games, global illumination and reflections are suggested at 1, which keeps Lumen (the engine's heaviest lighting) off.
@@ -281,13 +283,13 @@ Add `-Guard` to run only the Performance Guard.
 
 ```powershell
 Install-Module ps2exe -Scope CurrentUser
-Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.12.0
+Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.12.1
 ```
 
 To build the installer too, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
-& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.12.0 .\PimaxGameManager.iss
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.12.1 .\PimaxGameManager.iss
 ```
 
 The app icon and `assets/logo.png` are generated from the logo shapes used in the app:

@@ -37,7 +37,7 @@ try {
     if ((Test-Path $legacyCfg) -and -not (Test-Path $newCfg)) { Copy-Item $legacyCfg $newCfg }
 } catch { }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
-$AppVersion = '1.12.0'
+$AppVersion = '1.12.1'
 $RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-game-manager/releases/latest'
 
 # ---------- Performance: lock game settings, performance cores, window fix, background guard ----------
@@ -615,6 +615,8 @@ function Get-BeamNgSettings {
         if ($v) { return (Join-Path $v.FullName 'settings\settings.json') }
     }
 }
+# The most recently written of several possible settings files (games with one file per headset type)
+function Get-NewestOf([string[]]$paths) { $paths | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Sort-Object { (Get-Item -LiteralPath $_).LastWriteTimeUtc } -Descending | Select-Object -First 1 }
 $UntestedNote = 'Settings for this game come from published guides and haven''t been checked against a real install yet. A setting that shows "Not in the file" isn''t used by your version.'
 
 $Docs = [Environment]::GetFolderPath('MyDocuments')
@@ -724,6 +726,18 @@ $PerfGames += @(
     New-UeGame 'zerocaliber' 'Zero Caliber VR' 'ZeroCaliber' '' '' $false '' $true ''
     New-UeGame 'fnafhw' 'Five Nights at Freddy''s: Help Wanted' 'freddys' '' '' $false '' $true ''
     New-UeGame 'riven' 'Riven' 'Riven' '' '' $true '' $true ''
+    # Project CARS (same engine and settings as Automobilista 2). Each headset type has its own file; the newest one is used.
+    [pscustomobject]@{ Id = 'pcars2'; Name = 'Project CARS 2'; Process = @('pCARS2AVX', 'pCARS2'); RouteMatch = 'Project CARS 2|\\pCARS2(AVX)?\.exe|steam://\w+/378860\b'; Format = 'xmlattr'; Settings = $Ams2Settings; Untested = $true
+                       Configs = @({ Get-NewestOf @((Join-Path $Docs 'Project CARS 2\graphicsconfigopenvrdx11.xml'), (Join-Path $Docs 'Project CARS 2\graphicsconfigoculusdx11.xml')) }, (Join-Path $Docs 'Project CARS 2\graphicsconfigdx11.xml'))
+                       Note = 'The VR settings file (SteamVR or Oculus) is made the first time the game runs in VR.'
+                       Pin = @('try', 'Project CARS 2 uses several threads. It can help with big grids; test a race both ways.') }
+    [pscustomobject]@{ Id = 'pcars3'; Name = 'Project CARS 3'; Process = 'pCARS3'; RouteMatch = 'Project CARS 3|\\pCARS3\.exe|steam://\w+/958400\b'; Format = 'xmlattr'; Settings = $Ams2Settings; Untested = $true
+                       Configs = @({ Get-NewestOf @((Join-Path $env:LOCALAPPDATA 'Slightly Mad Studios\Project CARS 3\GraphicsConfigOpenVRDX11.xml'), (Join-Path $env:LOCALAPPDATA 'Slightly Mad Studios\Project CARS 3\GraphicsConfigOculusDX11.xml')) }, (Join-Path $env:LOCALAPPDATA 'Slightly Mad Studios\Project CARS 3\GraphicsConfigDX11.xml'))
+                       Note = 'Some settings don''t save from the game''s own menu in VR; locking them here keeps them.'
+                       Pin = @('try', 'Project CARS 3 uses several threads. It can help with big grids; test a race both ways.') }
+    [pscustomobject]@{ Id = 'pcars1'; Name = 'Project CARS'; Process = @('pCARS64', 'pCARS'); RouteMatch = '\\pCARS(64)?\.exe|steam://\w+/234630\b'; Format = 'xmlattr'; Settings = $Ams2Settings; Untested = $true
+                       Configs = @({ Get-NewestOf @((Join-Path $Docs 'Project CARS\graphicsconfigopenvrdx11.xml'), (Join-Path $Docs 'Project CARS\graphicsconfigoculusdx11.xml')) }, (Join-Path $Docs 'Project CARS\graphicsconfigdx11.xml'))
+                       Pin = @('try', 'Project CARS uses several threads. It can help with big grids; test a race both ways.') }
 )
 foreach ($g in $PerfGames) { if ($g.Untested -and -not $g.Note) { $g | Add-Member -NotePropertyName Note -NotePropertyValue $UntestedNote -Force } elseif ($g.Untested) { $g.Note = $g.Note + ' ' + $UntestedNote } }
 
