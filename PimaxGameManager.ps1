@@ -37,7 +37,7 @@ try {
     if ((Test-Path $legacyCfg) -and -not (Test-Path $newCfg)) { Copy-Item $legacyCfg $newCfg }
 } catch { }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
-$AppVersion = '1.12.2'
+$AppVersion = '1.12.3'
 $RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-game-manager/releases/latest'
 
 # ---------- Performance: lock game settings, performance cores, window fix, background guard ----------
@@ -896,7 +896,17 @@ function Get-CustomPerfGames {
     return $list
 }
 function Get-AllPerfGames { @($PerfGames) + @(Get-CustomPerfGames) }
-function Get-PerfGame([string]$id) { Get-AllPerfGames | Where-Object { $_.Id -eq $id } | Select-Object -First 1 }
+# Looked up without a pipeline, so every call hands back the very same object. Going through Where-Object/Select-Object
+# gave a new wrapper each time, and reading a property a game doesn't have (AddMissing, UeFolder...) on a new wrapper
+# adds an entry to PowerShell's member cache that is never freed and is searched on every lookup. The Performance Guard
+# does that every 10 seconds, so its memory and CPU grew without limit (150 GB after a few days).
+$PerfGameIndex = @{}
+foreach ($g in $PerfGames) { $PerfGameIndex[$g.Id] = $g }
+function Get-PerfGame([string]$id) {
+    if ($PerfGameIndex.ContainsKey($id)) { return $PerfGameIndex[$id] }
+    [void](Get-CustomPerfGames)   # reloads $script:PerfCustom when performance.json changed
+    foreach ($g in @($script:PerfCustom)) { if ($g.Id -eq $id) { return $g } }
+}
 
 # Where a game keeps its settings file (some are found by a small search, done once per run)
 $script:PerfPathCache = @{}
